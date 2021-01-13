@@ -5,7 +5,7 @@
 import json, hmac, hashlib, time, requests, base64
 from requests.auth import AuthBase
 
-with open('C:\\Users\\oddbo\\Documents\\Programming\\Python\\TradingBot\\my-config.json', 'r', encoding='utf-8') as f:
+with open('config.json', 'r', encoding='utf-8') as f:
     config_dict = json.load(f)
 
 # Create custom authentication for Exchange
