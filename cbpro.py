@@ -5,7 +5,7 @@
 import json, hmac, hashlib, time, requests, base64
 from requests.auth import AuthBase
 
-with open('C:\\Users\\oddbo\\Documents\\Programming\\Python\\TradingBot\\config.json', 'r', encoding='utf-8') as f:
+with open('C:\\Users\\oddbo\\Documents\\Programming\\Python\\TradingBot\\my-config.json', 'r', encoding='utf-8') as f:
     config_dict = json.load(f)
 
 # Create custom authentication for Exchange
@@ -212,7 +212,8 @@ def cascading_sells(price_dict, ticker, usd, rounds, factor=0.20, factor_adder=.
 
 ## main
 price_dict = check_price(['BTC', 'ETH', 'LINK'])
-# make_deposit(200)
+make_deposit(20)
+# time.sleep(20)
 # for key in price_dict:
 #     print(ke y + ': $' + str(price_dict[key]))
 # place_buy_order(price_dict, 'LINK', 28, .14)
@@ -222,19 +223,24 @@ price_dict = check_price(['BTC', 'ETH', 'LINK'])
 # AUTO DCA
 hour = 3600
 day = hour * 24
-flag = 0
-for i in range(0, 24):
+flag = 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+for i in range(0, 28):
     if flag == 0:
         place_market_buy(10, 'LINK', 'USD')
         flag = 1
     elif flag == 1:
         place_market_buy(10, 'GRT', 'USD')
+        flag = 2
+    elif flag == 2:
+        place_market_buy(10, 'BTC', 'USD')
         flag = 0
-    # elif flag == 2:
-    #     place_market_buy(10, 'ETH', 'USD')
-    #     flag = 3
-    # elif flag == 3:
-    #     place_market_buy(10, 'BTC', 'USD')
-    #     flag = 0
-    print(str(time.time()))
-    time.sleep(hour*2)
+    elif flag == 3:
+        place_market_buy(10, 'ETH', 'USD')
+        flag = 0
+    elif flag == 4
+        place_market_buy(10, 'SNX', 'USD')
+        flag = 0
+    print("Buy #" + str(i+1))
+    current_time = time.strftime("%H:%M:%S %D", time.localtime())
+    print(current_time)
+    time.sleep(hour*6)

@@ -2,3 +2,8 @@
 # send alerts (or make a different class for that)
 
 # https://www.youtube.com/watch?v=SeHiVKuwiiI
+import time
+
+# t = time.localtime()
+current_time = time.strftime("%H:%M:%S %D", time.localtime())
+print(current_time)
