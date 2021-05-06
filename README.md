@@ -8,3 +8,6 @@ An automated trading bot for Coinbase Pro, it's a bit rudimentary, but will:
 - d) be able to automate your trades
 
 Happy trading!
+
+#license
+https://github.com/torvalds/linux/blob/master/LICENSES/preferred/GPL-2.0
