@@ -10,4 +10,4 @@ An automated trading bot for Coinbase Pro, it's a bit rudimentary, but will:
 Happy trading!
 
 #license
-https://github.com/torvalds/linux/blob/master/LICENSES/preferred/GPL-2.0
+  https://github.com/torvalds/linux/blob/master/LICENSES/preferred/GPL-2.0
