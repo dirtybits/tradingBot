@@ -1,5 +1,5 @@
 # tradingBot
-just a bot that trades on coinbase, use it to DCA!
+just a bot that trades on coinbase (currently), use it to DCA!
 
 An automated trading bot for Coinbase Pro, it's a bit rudimentary, but will:
 - a) teach you about programming
