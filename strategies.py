@@ -3,7 +3,8 @@
 
 # https://www.youtube.com/watch?v=SeHiVKuwiiI
 import time
-
+import talib
+import numpy
 # t = time.localtime()
 current_time = time.strftime("%H:%M:%S %D", time.localtime())
 print(current_time)
