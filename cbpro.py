@@ -1,12 +1,12 @@
-'''
-
-'''
-
-import json, hmac, hashlib, time, requests, base64
+import json, hmac, hashlib, time, requests, base64, os
 from requests.auth import AuthBase
 
-with open('config.json', 'r', encoding='utf-8') as f:
-    config_dict = json.load(f)
+api_key = os.environ['CB_API_KEY']
+secret_key = os.environ['CB_SECRET_KEY']
+passphrase = os.environ['CB_PASSPHRASE']
+    
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Create custom authentication for Exchange
 class CoinbaseExchangeAuth(AuthBase):
@@ -209,6 +209,8 @@ def cascading_sells(price_dict, ticker, usd, rounds, factor=0.20, factor_adder=.
 # Use Indicators here
 
 # TO-DO add logging
+
+
 
 ## main
 price_dict = check_price(['BTC', 'ETH', 'LINK'])

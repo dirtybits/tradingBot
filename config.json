@@ -1,5 +1,0 @@
-{
-	"secret" : "<coinbase_secret>",
-	"key" : "<coinbase_key>",
-	"passphrase" : "<coinbase_passphrase>"
-}
