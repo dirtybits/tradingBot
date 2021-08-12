@@ -1,15 +1,24 @@
 # tradingBot
 
-An automated trading bot for Coinbase Pro, it's a bit rudimentary, but will:
-- a) teach you about programming
-- b) help you learn about finance
-- c) help you understand exchanges
-- d) be able to automate your trades 
+An automated trading bot for Coinbase Pro, will:
+- teach you about programming
+- help you learn about finance
+- help you understand exchanges
+- be able to automate your trades 
 
-'tradingBot/cbpro.py' is where much of the magic happens, the other files are for authentication and auxillary functions.
-this tool can be built out to work for multiple exchanges and in the future, defi protocols.
+'tradingBot/cbpro.py' is where much of the magic happens, the other files are auxillary.
+This tool can be built out to work for multiple exchanges and in the future, defi protocols.
 
 Happy trading!
+# use
+First add system environment variables for the given exchange
+ex
+```
+api_key = os.environ['CB_API_KEY']
+secret_key = os.environ['CB_SECRET_KEY']
+passphrase = os.environ['CB_PASSPHRASE']
+```
+# prerequisite
+WIP
 
-# license
-- https://github.com/torvalds/linux/blob/master/LICENSES/preferred/GPL-2.0
+
