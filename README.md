@@ -1,30 +1,25 @@
 # tradingBot
 
-A small Coinbase Advanced Trade CLI for:
-- public price lookups
-- authenticated balance queries
-- dry-run market buy payload generation
-- guarded live market buys
-- websocket ticker snapshots
+A Coinbase Advanced Trade CLI for price lookups, balance queries, market orders, websocket snapshots, and technical signals.
 
 Core files:
-- `cbpro.py`: Advanced Trade REST client and auth helpers
-- `webfeed.py`: Advanced Trade websocket helpers
-- `bot.py`: CLI entrypoint
-- `strategies.py`: pure strategy helpers
+- `tradebot.py` — CLI entrypoint
+- `cbpro.py` — Advanced Trade REST client and auth helpers
+- `webfeed.py` — Advanced Trade websocket helpers
+- `strategies.py` — pure strategy helpers (SMA, RSI, crossover, RSI signal)
 
 ## Setup
 
-Install dependencies with `uv` in a project-local virtual environment:
+Install dependencies with `uv`:
 
 ```bash
 brew install uv
 uv venv .venv
 source .venv/bin/activate
-uv pip install -r requirements.txt
+uv pip install -e .
 ```
 
-Set Advanced Trade credentials in your environment or `.env`:
+The `-e .` install makes `tradebot` available as a command. Set credentials in your environment or `.env`:
 
 ```bash
 CB_API_KEY="organizations/{org_id}/apiKeys/{key_id}"
@@ -35,36 +30,69 @@ Notes:
 - Use an Advanced Trade CDP API key, not old Coinbase Pro credentials.
 - The private key must preserve newlines. Escaped `\n` values in `.env` are supported.
 
-## Usage
+## Commands
 
-Fetch prices:
+All commands output JSON to stdout. Errors print to stderr with exit code 1.
 
-```bash
-python3 bot.py price BTC ETH --quote USD
-```
-
-List balances:
+### `price` — fetch current prices
 
 ```bash
-python3 bot.py balances
+bot price BTC
+bot price BTC ETH SOL
+bot price BTC ETH --quote EUR
 ```
 
-Generate a local dry-run market-buy payload:
+### `balances` — list account balances (requires credentials)
 
 ```bash
-python3 bot.py paper-buy BTC-USD --funds 10
+bot balances
+bot balances --all          # include zero-balance accounts
 ```
 
-Place a live buy:
+### `buy` — market buy order
+
+Paper mode by default (builds the order payload without sending it).
 
 ```bash
-python3 bot.py live-buy BTC-USD --funds 10 --confirm-live
+bot buy BTC-USD --funds 100
+bot buy ETH-USD --funds 50 --live --yes   # submit a real order
 ```
 
-Fetch one websocket ticker update per product:
+### `sell` — market sell order
+
+Paper mode by default.
 
 ```bash
-python3 bot.py feed BTC-USD ETH-USD
+bot sell BTC-USD --size 0.001
+bot sell ETH-USD --size 0.01 --live --yes  # submit a real order
 ```
 
+### `feed` — websocket ticker snapshot
 
+Collects one price update per product and exits.
+
+```bash
+bot feed BTC-USD
+bot feed BTC-USD ETH-USD SOL-USD
+```
+
+### `signal` — technical signal from recent candles
+
+Fetches candles from the REST API, runs a strategy, and returns a `buy`/`sell`/`hold` signal.
+
+```bash
+bot signal BTC-USD                           # moving-average crossover, 1h candles
+bot signal BTC-USD --strategy rsi            # RSI strategy
+bot signal ETH-USD --strategy crossover --short-window 5 --long-window 20
+bot signal BTC-USD --strategy rsi --candles 50 --period 14 --oversold 30 --overbought 70
+bot signal BTC-USD --granularity FIFTEEN_MINUTE --candles 100
+```
+
+Available granularities: `ONE_MINUTE`, `FIVE_MINUTE`, `FIFTEEN_MINUTE`, `THIRTY_MINUTE`, `ONE_HOUR`, `TWO_HOUR`, `SIX_HOUR`, `ONE_DAY`.
+
+### Global help
+
+```bash
+bot --help
+bot <command> --help
+```

@@ -30,6 +30,17 @@ DEFAULT_TIMEOUT_SECONDS = 10
 DEFAULT_QUOTE_INCREMENT = "0.01"
 DEFAULT_BASE_INCREMENT = "0.00000001"
 
+GRANULARITY_SECONDS: dict[str, int] = {
+    "ONE_MINUTE": 60,
+    "FIVE_MINUTE": 300,
+    "FIFTEEN_MINUTE": 900,
+    "THIRTY_MINUTE": 1800,
+    "ONE_HOUR": 3600,
+    "TWO_HOUR": 7200,
+    "SIX_HOUR": 21600,
+    "ONE_DAY": 86400,
+}
+
 
 class CoinbaseBotError(Exception):
     """Base exception for bot failures."""
@@ -446,6 +457,38 @@ class CoinbaseAdvancedTradeClient:
             side="BUY",
             quote_size=funds,
         )
+
+    def get_candles(
+        self,
+        product_id: str,
+        *,
+        granularity: str = "ONE_HOUR",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return up to *limit* candles in chronological order (oldest first).
+
+        Each candle dict contains: start, low, high, open, close, volume.
+        """
+        if granularity not in GRANULARITY_SECONDS:
+            raise ValueError(
+                f"Invalid granularity '{granularity}'. "
+                f"Choose from: {', '.join(GRANULARITY_SECONDS)}"
+            )
+        end = int(time.time())
+        start = end - GRANULARITY_SECONDS[granularity] * limit
+        response = self._request(
+            "GET",
+            f"market/products/{product_id}/candles",
+            params={
+                "start": str(start),
+                "end": str(end),
+                "granularity": granularity,
+                "limit": str(limit),
+            },
+        )
+        candles: list[dict[str, Any]] = response.get("candles", [])
+        # API returns newest-first; reverse for chronological order
+        return list(reversed(candles))
 
     def place_market_order(
         self,
