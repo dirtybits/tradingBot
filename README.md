@@ -15,10 +15,13 @@ Core files:
 
 ## Setup
 
-Install dependencies:
+Install dependencies with `uv` in a project-local virtual environment:
 
 ```bash
-python3 -m pip install -r requirements.txt
+brew install uv
+uv venv .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
 ```
 
 Set Advanced Trade credentials in your environment or `.env`:
