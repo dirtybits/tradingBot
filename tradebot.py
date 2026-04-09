@@ -5,6 +5,7 @@ import asyncio
 import json
 import sys
 import textwrap
+from decimal import Decimal
 from typing import Any
 
 from cbpro import CoinbaseAdvancedTradeClient, CoinbaseBotError, parse_positive_decimal
@@ -254,6 +255,48 @@ def _check_live_confirmation(
     )
 
 
+def _enrich_paper_order(
+    client: CoinbaseAdvancedTradeClient,
+    result: dict[str, Any],
+    product_id: str,
+    *,
+    funds: Decimal | None = None,
+    base_size: Decimal | None = None,
+) -> dict[str, Any]:
+    """Add estimated fill info to a dry-run order result.
+
+    Fetches the current price so paper-mode output shows what you'd actually
+    spend / receive — making the dry run a useful preview.
+    """
+    if not result.get("dry_run"):
+        return result
+    try:
+        symbol, quote = (product_id.split("-", 1) + ["USD"])[:2]
+        prices = client.check_prices([symbol], quote=quote)
+        price = prices.get(symbol)
+        if price is None:
+            return result
+        if funds is not None:
+            estimated_base = round(float(funds) / float(price), 8)
+            result = {
+                **result,
+                "estimated_price": price,
+                f"estimated_{symbol.lower()}": estimated_base,
+                f"funds_{quote.lower()}": str(funds),
+            }
+        elif base_size is not None:
+            estimated_quote = round(float(base_size) * float(price), 2)
+            result = {
+                **result,
+                "estimated_price": price,
+                f"estimated_{quote.lower()}": estimated_quote,
+                f"size_{symbol.lower()}": str(base_size),
+            }
+    except Exception:
+        pass  # never let price enrichment break the command
+    return result
+
+
 def _compute_signal(args: argparse.Namespace, prices: list[float]) -> dict[str, Any]:
     from strategies import (
         latest_relative_strength_index,
@@ -310,12 +353,18 @@ def main() -> int:
             _check_live_confirmation(parser, args)
             client = CoinbaseAdvancedTradeClient.from_env(live_mode=args.live and args.yes)
             result = client.place_market_order(args.product_id, funds=args.funds)
+            result = _enrich_paper_order(
+                client, result, args.product_id, funds=args.funds
+            )
 
         elif args.command == "sell":
             _check_live_confirmation(parser, args)
             client = CoinbaseAdvancedTradeClient.from_env(live_mode=args.live and args.yes)
             result = client.place_market_order(
                 args.product_id, base_size=args.size, side="SELL"
+            )
+            result = _enrich_paper_order(
+                client, result, args.product_id, base_size=args.size
             )
 
         elif args.command == "feed":

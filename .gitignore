@@ -7,4 +7,5 @@ auth-config.json
 venv/
 .venv/
 __pycache__/
-.firecrawl/*.egg-info/
+.firecrawl/
+*.egg-info/
