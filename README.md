@@ -1,9 +1,10 @@
 # tradingBot
 
-A Coinbase Advanced Trade CLI for price lookups, balance queries, market orders, websocket snapshots, and technical signals.
+A Coinbase Advanced Trade CLI for price lookups, balance queries, market orders, websocket snapshots, technical signals, and config-driven daily DCA runs.
 
 Core files:
 - `tradebot.py` — CLI entrypoint
+- `dca.py` — config loading, DCA runner, and sqlite idempotency ledger
 - `cbpro.py` — Advanced Trade REST client and auth helpers
 - `webfeed.py` — Advanced Trade websocket helpers
 - `strategies.py` — pure strategy helpers (SMA, RSI, crossover, RSI signal)
@@ -108,6 +109,56 @@ tradebot signal BTC-USD --granularity FIFTEEN_MINUTE --candles 100
 ```
 
 Available granularities: `ONE_MINUTE`, `FIVE_MINUTE`, `FIFTEEN_MINUTE`, `THIRTY_MINUTE`, `ONE_HOUR`, `TWO_HOUR`, `SIX_HOUR`, `ONE_DAY`.
+
+### `dca run` — config-driven daily buys
+
+Runs a daily set of limit buys from a config file. In live mode, successful
+same-day submissions are recorded in a local sqlite ledger so a cron retry does
+not submit duplicates for the same asset/date.
+
+```bash
+# Paper mode preview
+tradebot dca run --config dca.example.json
+
+# Backfill or test a specific day
+tradebot dca run --config dca.example.json --date 2026-04-08
+
+# Live run
+tradebot dca run --config dca.example.json --live --yes
+```
+
+Example config:
+
+```json
+{
+  "discount": 0.01,
+  "post_only": true,
+  "state_path": "~/.tradebot/dca.sqlite",
+  "assets": [
+    { "product_id": "BTC-USD", "funds": 10 },
+    { "product_id": "ETH-USD", "funds": 10 },
+    { "product_id": "SOL-USD", "funds": 10 }
+  ]
+}
+```
+
+Notes:
+- `discount` is a percent below market, so `0.01` means `0.01%`, not `1%`.
+- `post_only: true` makes each order maker-or-cancel.
+- The sqlite ledger only records live submissions; paper runs stay repeatable.
+
+### Cron
+
+Use cron to run the DCA job once per day. Example: 9:00 AM local time.
+
+```cron
+0 9 * * * cd /absolute/path/to/tradingBot && /absolute/path/to/tradingBot/.venv/bin/tradebot dca run --config /absolute/path/to/tradingBot/dca.example.json --live --yes >> ~/.tradebot/dca.log 2>&1
+```
+
+Tips:
+- Use absolute paths for both `tradebot` and the config file.
+- Keep the log file so you can inspect skipped/failed/submitted assets later.
+- Test the command in paper mode before enabling the live cron line.
 
 ### Global help
 

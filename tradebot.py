@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import date
 import json
 import sys
 import textwrap
@@ -9,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from cbpro import CoinbaseAdvancedTradeClient, CoinbaseBotError, parse_positive_decimal
+from dca import execute_dca, load_dca_config
 from webfeed import CoinbaseWebsocketError, collect_latest_prices
 
 
@@ -89,6 +91,16 @@ _SIGNAL_EPILOG = textwrap.dedent("""\
       tradebot signal ETH-USD --strategy crossover --short-window 5 --long-window 20
       tradebot signal BTC-USD --strategy rsi --candles 50 --period 14 --oversold 30 --overbought 70
       tradebot signal BTC-USD --granularity FIFTEEN_MINUTE --candles 100
+""")
+
+_DCA_RUN_EPILOG = textwrap.dedent("""\
+    Executes a config-driven set of daily limit buys. Live mode records a local
+    sqlite ledger so repeated same-day runs skip already-submitted assets.
+
+    Examples:
+      tradebot dca run --config dca.example.json
+      tradebot dca run --config dca.example.json --date 2026-04-08
+      tradebot dca run --config dca.example.json --live --yes
 """)
 
 
@@ -326,6 +338,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="RSI overbought threshold → sell signal (default: 70)",
     )
 
+    # dca ---------------------------------------------------------------------
+    dca_parser = subparsers.add_parser(
+        "dca",
+        help="Run config-driven daily limit buys",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    dca_subparsers = dca_parser.add_subparsers(dest="dca_command", required=True)
+
+    dca_run_parser = dca_subparsers.add_parser(
+        "run",
+        help="Execute daily DCA buys from a config file",
+        epilog=_DCA_RUN_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    dca_run_parser.add_argument(
+        "--config",
+        required=True,
+        help="Path to DCA config (.json or .toml)",
+    )
+    dca_run_parser.add_argument(
+        "--date",
+        dest="run_date",
+        help="Override run date for backfills/testing (YYYY-MM-DD)",
+    )
+    dca_run_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Submit real orders and record them in the DCA ledger — requires --yes",
+    )
+    dca_run_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm live DCA order submission",
+    )
+
     return parser
 
 
@@ -357,6 +404,21 @@ def _check_live_confirmation(
         message=(
             f"Error: --live requires --yes to prevent accidental order submission.\n"
             f"  {example}\n"
+        ),
+    )
+
+
+def _check_dca_live_confirmation(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    if not args.live or args.yes:
+        return
+    parser.exit(
+        status=1,
+        message=(
+            "Error: --live requires --yes to prevent accidental order submission.\n"
+            f"  tradebot dca run --config {args.config} --live --yes\n"
         ),
     )
 
@@ -571,6 +633,16 @@ def main() -> int:
 
         elif args.command == "feed":
             result = asyncio.run(collect_latest_prices(args.product_ids))
+
+        elif args.command == "dca":
+            if args.dca_command != "run":
+                raise ValueError(f"Unsupported dca command: {args.dca_command}")
+            _check_dca_live_confirmation(parser, args)
+            is_live = args.live and args.yes
+            config = load_dca_config(args.config)
+            run_date = date.fromisoformat(args.run_date) if args.run_date else None
+            client = CoinbaseAdvancedTradeClient.from_env(live_mode=is_live)
+            result = execute_dca(client, config, live_mode=is_live, run_date=run_date)
 
         else:  # signal
             client = CoinbaseAdvancedTradeClient.from_env(live_mode=False)

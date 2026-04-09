@@ -223,5 +223,49 @@ class LimitOrderCliTests(unittest.TestCase):
         self.assertEqual(output["reference_price"], 95000.0)
 
 
+class DcaCliTests(unittest.TestCase):
+    def test_dca_run_requires_yes_flag(self) -> None:
+        stderr = io.StringIO()
+        with patch.object(
+            sys,
+            "argv",
+            ["tradebot", "dca", "run", "--config", "dca.example.json", "--live"],
+        ):
+            with redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as exc:
+                    main()
+
+        self.assertEqual(exc.exception.code, 1)
+        self.assertIn("--yes", stderr.getvalue())
+
+    @patch("tradebot.execute_dca")
+    @patch("tradebot.load_dca_config")
+    @patch("tradebot.CoinbaseAdvancedTradeClient.from_env")
+    def test_dca_run_paper_mode_outputs_summary(self, from_env, load_config, execute_dca) -> None:
+        load_config.return_value = object()
+        execute_dca.return_value = {
+            "command": "dca run",
+            "live_mode": False,
+            "run_date": "2026-04-08",
+            "results": [],
+            "summary": {"previewed": 3, "submitted": 0, "skipped": 0, "failed": 0},
+        }
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(
+            sys,
+            "argv",
+            ["tradebot", "dca", "run", "--config", "dca.example.json", "--date", "2026-04-08"],
+        ):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                rc = main()
+
+        self.assertEqual(rc, 0)
+        from_env.assert_called_once_with(live_mode=False)
+        load_config.assert_called_once_with("dca.example.json")
+        execute_dca.assert_called_once()
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(output["summary"]["previewed"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

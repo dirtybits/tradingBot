@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["tradebot", "cbpro", "webfeed", "strategies"]
+py-modules = ["tradebot", "cbpro", "webfeed", "strategies", "dca"]
 
 [project.scripts]
 tradebot = "tradebot:main"
