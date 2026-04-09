@@ -140,6 +140,34 @@ class OrderPayloadTests(unittest.TestCase):
         self.assertEqual(len(balances), 1)
         self.assertEqual(balances[0]["currency"], "BTC")
 
+    def test_live_market_buy_fetches_order_details(self) -> None:
+        client = CoinbaseAdvancedTradeClient(credentials=None, live_mode=True)
+        with patch.object(
+            client,
+            "_submit_private_action",
+            return_value={
+                "success": True,
+                "success_response": {
+                    "order_id": "order-123",
+                    "product_id": "BTC-USD",
+                    "side": "BUY",
+                },
+            },
+        ), patch.object(
+            client,
+            "get_order",
+            return_value={
+                "order_id": "order-123",
+                "filled_size": "0.001",
+                "average_filled_price": "65000.00",
+            },
+        ) as get_order:
+            result = client.place_market_order("BTC-USD", funds="10")
+
+        get_order.assert_called_once_with("order-123")
+        self.assertEqual(result["success_response"]["order_id"], "order-123")
+        self.assertEqual(result["order"]["filled_size"], "0.001")
+
     def test_parse_positive_decimal_rejects_zero(self) -> None:
         with self.assertRaises(ValueError):
             parse_positive_decimal("0")

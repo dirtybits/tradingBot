@@ -255,6 +255,38 @@ def _check_live_confirmation(
     )
 
 
+def _print_live_order_summary(result: dict[str, Any]) -> None:
+    """Print a human-readable fill confirmation to stderr after a live order."""
+    order = result.get("order")
+    if not isinstance(order, dict):
+        return
+
+    filled_size = order.get("filled_size")
+    average_price = order.get("average_filled_price")
+    success_response = result.get("success_response")
+    product_id = order.get("product_id") or (
+        success_response.get("product_id") if isinstance(success_response, dict) else None
+    ) or "order"
+    side = str(order.get("side", "BUY")).upper()
+    base, _, quote = str(product_id).partition("-")
+    verb = "Bought" if side == "BUY" else "Sold"
+
+    if filled_size and average_price:
+        print(
+            f"{verb} {filled_size} {base} at {average_price} {quote} per {base}.",
+            file=sys.stderr,
+        )
+        return
+
+    status = order.get("status")
+    if status:
+        action = "buy" if side == "BUY" else "sell"
+        print(
+            f"Submitted {product_id} {action} order; fill details are not available yet.",
+            file=sys.stderr,
+        )
+
+
 def _enrich_paper_order(
     client: CoinbaseAdvancedTradeClient,
     result: dict[str, Any],
@@ -351,21 +383,25 @@ def main() -> int:
 
         elif args.command == "buy":
             _check_live_confirmation(parser, args)
-            client = CoinbaseAdvancedTradeClient.from_env(live_mode=args.live and args.yes)
+            is_live = args.live and args.yes
+            client = CoinbaseAdvancedTradeClient.from_env(live_mode=is_live)
             result = client.place_market_order(args.product_id, funds=args.funds)
-            result = _enrich_paper_order(
-                client, result, args.product_id, funds=args.funds
-            )
+            if is_live:
+                _print_live_order_summary(result)
+            else:
+                result = _enrich_paper_order(client, result, args.product_id, funds=args.funds)
 
         elif args.command == "sell":
             _check_live_confirmation(parser, args)
-            client = CoinbaseAdvancedTradeClient.from_env(live_mode=args.live and args.yes)
+            is_live = args.live and args.yes
+            client = CoinbaseAdvancedTradeClient.from_env(live_mode=is_live)
             result = client.place_market_order(
                 args.product_id, base_size=args.size, side="SELL"
             )
-            result = _enrich_paper_order(
-                client, result, args.product_id, base_size=args.size
-            )
+            if is_live:
+                _print_live_order_summary(result)
+            else:
+                result = _enrich_paper_order(client, result, args.product_id, base_size=args.size)
 
         elif args.command == "feed":
             result = asyncio.run(collect_latest_prices(args.product_ids))

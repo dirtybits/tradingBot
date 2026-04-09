@@ -414,6 +414,14 @@ class CoinbaseAdvancedTradeClient:
             if _decimal(account.get("available_balance", {}).get("value", "0")) > 0
         ]
 
+    def get_order(self, order_id: str) -> dict[str, Any]:
+        response = self._request(
+            "GET",
+            f"orders/historical/{order_id}",
+            auth_required=True,
+        )
+        return response.get("order", {})
+
     def get_product(self, product_id: str) -> dict[str, Any]:
         return self._request("GET", f"market/products/{product_id}")
 
@@ -516,4 +524,9 @@ class CoinbaseAdvancedTradeClient:
                 side="SELL",
                 base_size=sell_size,
             )
-        return self._submit_private_action("POST", "orders", payload)
+        response = self._submit_private_action("POST", "orders", payload)
+        success_response = response.get("success_response", {})
+        order_id = success_response.get("order_id")
+        if self.live_mode and order_id:
+            response["order"] = self.get_order(order_id)
+        return response
