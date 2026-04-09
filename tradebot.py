@@ -47,6 +47,30 @@ _SELL_EPILOG = textwrap.dedent("""\
       tradebot sell ETH-USD --size 0.01 --live --yes
 """)
 
+_LIMIT_BUY_EPILOG = textwrap.dedent("""\
+    Places a GTC (Good Till Cancelled) limit buy below the current market price,
+    giving you maker fees (~60 bps) instead of taker (~120 bps).
+    --post-only cancels the order instead of filling as a taker if the price
+    moves through your limit before it rests in the book.
+
+    Examples:
+      tradebot limit-buy BTC-USD --funds 100
+      tradebot limit-buy BTC-USD --funds 100 --discount 0.5
+      tradebot limit-buy BTC-USD --funds 100 --post-only --live --yes
+""")
+
+_LIMIT_SELL_EPILOG = textwrap.dedent("""\
+    Places a GTC (Good Till Cancelled) limit sell above the current market price,
+    giving you maker fees (~60 bps) instead of taker (~120 bps).
+    --post-only cancels the order instead of filling as a taker if the price
+    moves through your limit before it rests in the book.
+
+    Examples:
+      tradebot limit-sell BTC-USD --size 0.001
+      tradebot limit-sell BTC-USD --size 0.001 --premium 0.5
+      tradebot limit-sell BTC-USD --size 0.001 --post-only --live --yes
+""")
+
 _FEED_EPILOG = textwrap.dedent("""\
     Examples:
       tradebot feed BTC-USD
@@ -153,6 +177,80 @@ def build_parser() -> argparse.ArgumentParser:
         help="Confirm live order submission",
     )
 
+    # limit-buy ---------------------------------------------------------------
+    limit_buy_parser = subparsers.add_parser(
+        "limit-buy",
+        help="Place a GTC limit buy below market — maker fees, paper mode by default",
+        epilog=_LIMIT_BUY_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    limit_buy_parser.add_argument("product_id", help="Product such as BTC-USD")
+    limit_buy_parser.add_argument(
+        "--funds",
+        required=True,
+        type=parse_positive_decimal,
+        help="Quote funds to spend (e.g. 100 for $100)",
+    )
+    limit_buy_parser.add_argument(
+        "--discount",
+        type=float,
+        default=0.3,
+        metavar="PCT",
+        help="Percent below market price for the limit (default: 0.3)",
+    )
+    limit_buy_parser.add_argument(
+        "--post-only",
+        action="store_true",
+        help="Cancel instead of crossing as a taker (guarantees maker fee)",
+    )
+    limit_buy_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Submit a real order — requires --yes",
+    )
+    limit_buy_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm live order submission",
+    )
+
+    # limit-sell --------------------------------------------------------------
+    limit_sell_parser = subparsers.add_parser(
+        "limit-sell",
+        help="Place a GTC limit sell above market — maker fees, paper mode by default",
+        epilog=_LIMIT_SELL_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    limit_sell_parser.add_argument("product_id", help="Product such as BTC-USD")
+    limit_sell_parser.add_argument(
+        "--size",
+        required=True,
+        type=parse_positive_decimal,
+        help="Base asset amount to sell (e.g. 0.001 for 0.001 BTC)",
+    )
+    limit_sell_parser.add_argument(
+        "--premium",
+        type=float,
+        default=0.3,
+        metavar="PCT",
+        help="Percent above market price for the limit (default: 0.3)",
+    )
+    limit_sell_parser.add_argument(
+        "--post-only",
+        action="store_true",
+        help="Cancel instead of crossing as a taker (guarantees maker fee)",
+    )
+    limit_sell_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Submit a real order — requires --yes",
+    )
+    limit_sell_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm live order submission",
+    )
+
     # feed --------------------------------------------------------------------
     feed_parser = subparsers.add_parser(
         "feed",
@@ -242,10 +340,18 @@ def _check_live_confirmation(
     """Exit with an actionable error if --live is set without --yes."""
     if not args.live or args.yes:
         return
-    if args.command == "buy":
-        example = f"tradebot buy {args.product_id} --funds {args.funds} --live --yes"
+    cmd = args.command
+    pid = args.product_id
+    if cmd == "buy":
+        example = f"tradebot buy {pid} --funds {args.funds} --live --yes"
+    elif cmd == "sell":
+        example = f"tradebot sell {pid} --size {args.size} --live --yes"
+    elif cmd == "limit-buy":
+        example = f"tradebot limit-buy {pid} --funds {args.funds} --live --yes"
+    elif cmd == "limit-sell":
+        example = f"tradebot limit-sell {pid} --size {args.size} --live --yes"
     else:
-        example = f"tradebot sell {args.product_id} --size {args.size} --live --yes"
+        example = f"tradebot {cmd} ... --live --yes"
     parser.exit(
         status=1,
         message=(
@@ -271,14 +377,28 @@ def _print_live_order_summary(result: dict[str, Any]) -> None:
     base, _, quote = str(product_id).partition("-")
     verb = "Bought" if side == "BUY" else "Sold"
 
-    if filled_size and average_price:
+    if filled_size and average_price and float(filled_size) > 0:
         print(
             f"{verb} {filled_size} {base} at {average_price} {quote} per {base}.",
             file=sys.stderr,
         )
         return
 
-    status = order.get("status")
+    # Limit orders rest as OPEN until filled — give a useful status line
+    status = str(order.get("status", ""))
+    order_cfg = order.get("order_configuration") or {}
+    limit_cfg = order_cfg.get("limit_limit_gtc") or {}
+    limit_price = limit_cfg.get("limit_price")
+
+    if status == "OPEN" and limit_price:
+        action = "buy" if side == "BUY" else "sell"
+        post_only_note = " (post-only)" if limit_cfg.get("post_only") else ""
+        print(
+            f"Limit {action} placed at {limit_price} {quote}{post_only_note}. Waiting to fill.",
+            file=sys.stderr,
+        )
+        return
+
     if status:
         action = "buy" if side == "BUY" else "sell"
         print(
@@ -402,6 +522,52 @@ def main() -> int:
                 _print_live_order_summary(result)
             else:
                 result = _enrich_paper_order(client, result, args.product_id, base_size=args.size)
+
+        elif args.command == "limit-buy":
+            _check_live_confirmation(parser, args)
+            is_live = args.live and args.yes
+            client = CoinbaseAdvancedTradeClient.from_env(live_mode=is_live)
+            price_factor = Decimal(str(args.discount)) / Decimal("100")
+            symbol, _, quote_currency = args.product_id.partition("-")
+            prices = client.check_prices([symbol], quote=quote_currency or "USD")
+            ref_price = prices.get(symbol)
+            if ref_price is None:
+                raise ValueError(f"Could not fetch price for {args.product_id}")
+            result = client.place_limit_order(
+                args.product_id,
+                side="BUY",
+                quote_amount=args.funds,
+                reference_price=ref_price,
+                price_factor=price_factor,
+                post_only=args.post_only,
+            )
+            if is_live:
+                _print_live_order_summary(result)
+            else:
+                result = {**result, "reference_price": ref_price}
+
+        elif args.command == "limit-sell":
+            _check_live_confirmation(parser, args)
+            is_live = args.live and args.yes
+            client = CoinbaseAdvancedTradeClient.from_env(live_mode=is_live)
+            price_factor = Decimal(str(args.premium)) / Decimal("100")
+            symbol, _, quote_currency = args.product_id.partition("-")
+            prices = client.check_prices([symbol], quote=quote_currency or "USD")
+            ref_price = prices.get(symbol)
+            if ref_price is None:
+                raise ValueError(f"Could not fetch price for {args.product_id}")
+            result = client.place_limit_order(
+                args.product_id,
+                side="SELL",
+                base_size=args.size,
+                reference_price=ref_price,
+                price_factor=price_factor,
+                post_only=args.post_only,
+            )
+            if is_live:
+                _print_live_order_summary(result)
+            else:
+                result = {**result, "reference_price": ref_price}
 
         elif args.command == "feed":
             result = asyncio.run(collect_latest_prices(args.product_ids))

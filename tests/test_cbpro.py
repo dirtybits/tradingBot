@@ -72,6 +72,49 @@ class OrderPayloadTests(unittest.TestCase):
         self.assertEqual(limit_order["base_size"], "0.00020202")
         self.assertTrue(limit_order["rfq_disabled"])
 
+    def test_build_limit_order_post_only_flag(self) -> None:
+        payload = build_limit_order(
+            product_id="BTC-USD",
+            side="BUY",
+            quote_amount="10",
+            reference_price="50000",
+            post_only=True,
+            client_order_id="limit-po",
+        )
+        self.assertTrue(payload["order_configuration"]["limit_limit_gtc"]["post_only"])
+
+    def test_build_limit_sell_order_uses_base_size_directly(self) -> None:
+        payload = build_limit_order(
+            product_id="BTC-USD",
+            side="SELL",
+            base_size="0.001",
+            reference_price="50000",
+            price_factor="0.003",
+            quote_increment="0.01",
+            client_order_id="limit-sell-1",
+        )
+        limit_order = payload["order_configuration"]["limit_limit_gtc"]
+        self.assertEqual(payload["side"], "SELL")
+        # SELL limit should be 0.3% above reference: 50000 * 1.003 = 50150.00
+        self.assertEqual(limit_order["limit_price"], "50150.00")
+        self.assertEqual(limit_order["base_size"], "0.00100000")
+
+    def test_build_limit_order_requires_exactly_one_amount(self) -> None:
+        with self.assertRaises(ValueError):
+            build_limit_order(
+                product_id="BTC-USD",
+                side="BUY",
+                reference_price="50000",
+            )
+        with self.assertRaises(ValueError):
+            build_limit_order(
+                product_id="BTC-USD",
+                side="BUY",
+                quote_amount="10",
+                base_size="0.001",
+                reference_price="50000",
+            )
+
     def test_paper_market_buy_returns_dry_run_payload(self) -> None:
         session = Mock()
         session.headers = {}
@@ -167,6 +210,57 @@ class OrderPayloadTests(unittest.TestCase):
         get_order.assert_called_once_with("order-123")
         self.assertEqual(result["success_response"]["order_id"], "order-123")
         self.assertEqual(result["order"]["filled_size"], "0.001")
+
+    def test_paper_limit_buy_returns_dry_run_payload(self) -> None:
+        session = Mock()
+        session.headers = {}
+        session.request.side_effect = AssertionError("network should not be called")
+        client = CoinbaseAdvancedTradeClient(
+            credentials=None,
+            live_mode=False,
+            session=session,
+        )
+
+        result = client.place_limit_order(
+            "BTC-USD",
+            side="BUY",
+            quote_amount="10",
+            reference_price="50000",
+            price_factor="0.003",
+        )
+
+        self.assertTrue(result["dry_run"])
+        limit_cfg = result["payload"]["order_configuration"]["limit_limit_gtc"]
+        self.assertEqual(limit_cfg["limit_price"], "49850.00")
+        self.assertEqual(result["payload"]["side"], "BUY")
+
+    def test_live_limit_order_fetches_order_details(self) -> None:
+        client = CoinbaseAdvancedTradeClient(credentials=None, live_mode=True)
+        with patch.object(
+            client,
+            "_submit_private_action",
+            return_value={
+                "success": True,
+                "success_response": {"order_id": "limit-order-1", "product_id": "BTC-USD"},
+            },
+        ), patch.object(
+            client,
+            "get_order",
+            return_value={
+                "order_id": "limit-order-1",
+                "status": "OPEN",
+                "order_type": "LIMIT",
+            },
+        ) as get_order:
+            result = client.place_limit_order(
+                "BTC-USD",
+                side="BUY",
+                quote_amount="10",
+                reference_price="50000",
+            )
+
+        get_order.assert_called_once_with("limit-order-1")
+        self.assertEqual(result["order"]["status"], "OPEN")
 
     def test_parse_positive_decimal_rejects_zero(self) -> None:
         with self.assertRaises(ValueError):

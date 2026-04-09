@@ -37,16 +37,16 @@ All commands output JSON to stdout. Errors print to stderr with exit code 1.
 ### `price` — fetch current prices
 
 ```bash
-bot price BTC
-bot price BTC ETH SOL
-bot price BTC ETH --quote EUR
+tradebot price BTC
+tradebot price BTC ETH SOL
+tradebot price BTC ETH --quote EUR
 ```
 
 ### `balances` — list account balances (requires credentials)
 
 ```bash
-bot balances
-bot balances --all          # include zero-balance accounts
+tradebot balances
+tradebot balances --all          # include zero-balance accounts
 ```
 
 ### `buy` — market buy order
@@ -54,8 +54,8 @@ bot balances --all          # include zero-balance accounts
 Paper mode by default (builds the order payload without sending it).
 
 ```bash
-bot buy BTC-USD --funds 100
-bot buy ETH-USD --funds 50 --live --yes   # submit a real order
+tradebot buy BTC-USD --funds 100
+tradebot buy ETH-USD --funds 50 --live --yes   # submit a real order
 ```
 
 ### `sell` — market sell order
@@ -63,8 +63,27 @@ bot buy ETH-USD --funds 50 --live --yes   # submit a real order
 Paper mode by default.
 
 ```bash
-bot sell BTC-USD --size 0.001
-bot sell ETH-USD --size 0.01 --live --yes  # submit a real order
+tradebot sell BTC-USD --size 0.001
+tradebot sell ETH-USD --size 0.01 --live --yes  # submit a real order
+```
+
+### `limit-buy` / `limit-sell` — maker-friendly limit orders
+
+Use these to place resting GTC limit orders near market. `--post-only` ensures
+maker execution (or cancellation), so you never accidentally pay taker fees.
+
+```bash
+# Preview a limit buy (paper mode)
+tradebot limit-buy BTC-USD --funds 100
+
+# 0.5% below market instead of the default 0.3%
+tradebot limit-buy BTC-USD --funds 100 --discount 0.5
+
+# Live post-only limit buy (maker-or-cancel)
+tradebot limit-buy BTC-USD --funds 100 --post-only --live --yes
+
+# Live limit sell 0.3% above market (default premium)
+tradebot limit-sell BTC-USD --size 0.001 --live --yes
 ```
 
 ### `feed` — websocket ticker snapshot
@@ -72,8 +91,8 @@ bot sell ETH-USD --size 0.01 --live --yes  # submit a real order
 Collects one price update per product and exits.
 
 ```bash
-bot feed BTC-USD
-bot feed BTC-USD ETH-USD SOL-USD
+tradebot feed BTC-USD
+tradebot feed BTC-USD ETH-USD SOL-USD
 ```
 
 ### `signal` — technical signal from recent candles
@@ -81,11 +100,11 @@ bot feed BTC-USD ETH-USD SOL-USD
 Fetches candles from the REST API, runs a strategy, and returns a `buy`/`sell`/`hold` signal.
 
 ```bash
-bot signal BTC-USD                           # moving-average crossover, 1h candles
-bot signal BTC-USD --strategy rsi            # RSI strategy
-bot signal ETH-USD --strategy crossover --short-window 5 --long-window 20
-bot signal BTC-USD --strategy rsi --candles 50 --period 14 --oversold 30 --overbought 70
-bot signal BTC-USD --granularity FIFTEEN_MINUTE --candles 100
+tradebot signal BTC-USD                           # moving-average crossover, 1h candles
+tradebot signal BTC-USD --strategy rsi            # RSI strategy
+tradebot signal ETH-USD --strategy crossover --short-window 5 --long-window 20
+tradebot signal BTC-USD --strategy rsi --candles 50 --period 14 --oversold 30 --overbought 70
+tradebot signal BTC-USD --granularity FIFTEEN_MINUTE --candles 100
 ```
 
 Available granularities: `ONE_MINUTE`, `FIVE_MINUTE`, `FIFTEEN_MINUTE`, `THIRTY_MINUTE`, `ONE_HOUR`, `TWO_HOUR`, `SIX_HOUR`, `ONE_DAY`.
@@ -93,6 +112,6 @@ Available granularities: `ONE_MINUTE`, `FIVE_MINUTE`, `FIFTEEN_MINUTE`, `THIRTY_
 ### Global help
 
 ```bash
-bot --help
-bot <command> --help
+tradebot --help
+tradebot <command> --help
 ```

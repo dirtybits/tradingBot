@@ -213,33 +213,48 @@ def build_limit_order(
     product_id: str,
     *,
     side: str,
-    quote_amount: Decimal | float | int | str,
+    quote_amount: Decimal | float | int | str | None = None,
+    base_size: Decimal | float | int | str | None = None,
     reference_price: Decimal | float | int | str,
     price_factor: Decimal | float | int | str = "0.01",
+    post_only: bool = False,
     base_increment: Decimal | float | int | str = DEFAULT_BASE_INCREMENT,
     quote_increment: Decimal | float | int | str = DEFAULT_QUOTE_INCREMENT,
     client_order_id: str | None = None,
 ) -> dict[str, Any]:
+    """Build a GTC limit order payload.
+
+    For buys, supply *quote_amount* (funds to spend); the base size is
+    calculated from the limit price.  For sells, supply *base_size* directly.
+    """
+    if (quote_amount is None) == (base_size is None):
+        raise ValueError("Provide exactly one of quote_amount or base_size.")
+
     limit_price = calculate_limit_price(
         reference_price,
         price_factor,
         side=side,
         quote_increment=quote_increment,
     )
-    base_size = calculate_size_from_quote(
-        quote_amount=quote_amount,
-        limit_price=limit_price,
-        base_increment=base_increment,
-    )
+
+    if base_size is None:
+        computed_base_size = calculate_size_from_quote(
+            quote_amount=quote_amount,  # type: ignore[arg-type]
+            limit_price=limit_price,
+            base_increment=base_increment,
+        )
+    else:
+        computed_base_size = _format_for_increment(base_size, base_increment)
+
     return {
         "client_order_id": client_order_id or str(uuid.uuid4()),
         "product_id": product_id,
         "side": side.upper(),
         "order_configuration": {
             "limit_limit_gtc": {
-                "base_size": base_size,
+                "base_size": computed_base_size,
                 "limit_price": limit_price,
-                "post_only": False,
+                "post_only": post_only,
                 "rfq_disabled": True,
             }
         },
@@ -524,6 +539,39 @@ class CoinbaseAdvancedTradeClient:
                 side="SELL",
                 base_size=sell_size,
             )
+        response = self._submit_private_action("POST", "orders", payload)
+        success_response = response.get("success_response", {})
+        order_id = success_response.get("order_id")
+        if self.live_mode and order_id:
+            response["order"] = self.get_order(order_id)
+        return response
+
+    def place_limit_order(
+        self,
+        product_id: str,
+        *,
+        side: str,
+        quote_amount: Decimal | float | int | str | None = None,
+        base_size: Decimal | float | int | str | None = None,
+        reference_price: Decimal | float | int | str,
+        price_factor: Decimal | float | int | str = "0.003",
+        post_only: bool = False,
+    ) -> Any:
+        """Place a GTC limit order priced relative to *reference_price*.
+
+        *price_factor* is the fractional distance from market (default 0.003 =
+        0.3%).  Buy orders are placed *below* market; sell orders *above*.
+        Set *post_only=True* to guarantee maker execution or cancel.
+        """
+        payload = build_limit_order(
+            product_id,
+            side=side,
+            quote_amount=quote_amount,
+            base_size=base_size,
+            reference_price=reference_price,
+            price_factor=price_factor,
+            post_only=post_only,
+        )
         response = self._submit_private_action("POST", "orders", payload)
         success_response = response.get("success_response", {})
         order_id = success_response.get("order_id")
