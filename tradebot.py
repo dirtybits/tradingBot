@@ -93,6 +93,12 @@ _SIGNAL_EPILOG = textwrap.dedent("""\
       tradebot signal BTC-USD --granularity FIFTEEN_MINUTE --candles 100
 """)
 
+_ORDERS_EPILOG = textwrap.dedent("""\
+    Examples:
+      tradebot orders
+      tradebot orders --product BTC-USD
+""")
+
 _DCA_RUN_EPILOG = textwrap.dedent("""\
     Executes a config-driven set of daily limit buys. Live mode records a local
     sqlite ledger so repeated same-day runs skip already-submitted assets.
@@ -336,6 +342,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=70.0,
         metavar="THRESHOLD",
         help="RSI overbought threshold → sell signal (default: 70)",
+    )
+
+    # orders ------------------------------------------------------------------
+    orders_parser = subparsers.add_parser(
+        "orders",
+        help="List open orders (requires credentials)",
+        epilog=_ORDERS_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    orders_parser.add_argument(
+        "--product",
+        dest="product_id",
+        help="Filter by product (e.g. BTC-USD)",
     )
 
     # dca ---------------------------------------------------------------------
@@ -630,6 +649,10 @@ def main() -> int:
                 _print_live_order_summary(result)
             else:
                 result = {**result, "reference_price": ref_price}
+
+        elif args.command == "orders":
+            client = CoinbaseAdvancedTradeClient.from_env(live_mode=True)
+            result = client.get_open_orders(product_id=args.product_id)
 
         elif args.command == "feed":
             result = asyncio.run(collect_latest_prices(args.product_ids))

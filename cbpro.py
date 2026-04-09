@@ -437,6 +437,31 @@ class CoinbaseAdvancedTradeClient:
         )
         return response.get("order", {})
 
+    def get_open_orders(self, product_id: str | None = None) -> list[dict[str, Any]]:
+        orders: list[dict[str, Any]] = []
+        cursor: str | None = None
+
+        while True:
+            params: dict[str, Any] = {"order_status": "OPEN", "limit": 250}
+            if product_id:
+                params["product_id"] = product_id
+            if cursor:
+                params["cursor"] = cursor
+            response = self._request(
+                "GET",
+                "orders/historical/batch",
+                auth_required=True,
+                params=params,
+            )
+            orders.extend(response.get("orders", []))
+            if not response.get("has_next"):
+                break
+            cursor = response.get("cursor")
+            if not cursor:
+                break
+
+        return orders
+
     def get_product(self, product_id: str) -> dict[str, Any]:
         return self._request("GET", f"market/products/{product_id}")
 
