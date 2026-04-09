@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from cbpro import (
     CoinbaseAdvancedTradeClient,
+    CoinbaseAdvancedTradeAuth,
     CoinbaseCredentials,
     build_limit_order,
     build_market_order,
@@ -142,6 +143,36 @@ class OrderPayloadTests(unittest.TestCase):
     def test_parse_positive_decimal_rejects_zero(self) -> None:
         with self.assertRaises(ValueError):
             parse_positive_decimal("0")
+
+
+class AuthenticationTests(unittest.TestCase):
+    @patch("cbpro.serialization.load_pem_private_key")
+    @patch("cbpro._build_es256_jwt")
+    def test_rest_jwt_uri_claim_excludes_query_string(
+        self,
+        build_jwt: Mock,
+        load_private_key: Mock,
+    ) -> None:
+        build_jwt.return_value = "signed-token"
+        load_private_key.return_value = Mock()
+        credentials = CoinbaseCredentials(
+            api_key="organizations/test/apiKeys/test",
+            api_secret="-----BEGIN EC PRIVATE KEY-----\nsecret\n-----END EC PRIVATE KEY-----\n",
+        )
+        auth = CoinbaseAdvancedTradeAuth(credentials)
+        request = Mock()
+        request.method = "GET"
+        request.url = "https://api.coinbase.com/api/v3/brokerage/accounts?limit=250&cursor=abc"
+        request.headers = {}
+
+        auth(request)
+
+        payload = build_jwt.call_args.args[0]
+        self.assertEqual(
+            payload["uri"],
+            "GET api.coinbase.com/api/v3/brokerage/accounts",
+        )
+        self.assertEqual(request.headers["Authorization"], "Bearer signed-token")
 
 
 if __name__ == "__main__":
