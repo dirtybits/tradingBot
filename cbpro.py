@@ -1,248 +1,480 @@
-import json, hmac, hashlib, time, requests, base64, os
+from __future__ import annotations
+
+import base64
+import json
+import os
+import secrets
+import time
+import uuid
+from dataclasses import dataclass
+from decimal import Decimal, ROUND_DOWN, InvalidOperation
+from typing import Any, Iterable
+from urllib.parse import urlsplit
+
+import requests
+from cryptography.hazmat.primitives import hashes, serialization  # pyright: ignore[reportMissingImports]
+from cryptography.hazmat.primitives.asymmetric import ec  # pyright: ignore[reportMissingImports]
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature  # pyright: ignore[reportMissingImports]
 from requests.auth import AuthBase
 
-api_key = os.environ['CB_API_KEY']
-secret_key = os.environ['CB_SECRET_KEY']
-passphrase = os.environ['CB_PASSPHRASE']
-    
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency
+    load_dotenv = None
 
-# Create custom authentication for Exchange
-class CoinbaseExchangeAuth(AuthBase):
-    def __init__(self, api_key, secret_key, passphrase):
-        self.api_key = api_key
-        self.secret_key = secret_key
-        self.passphrase = passphrase
 
-    def __call__(self, request):
-        timestamp = str(time.time())
-        message = timestamp + request.method + request.path_url + (request.body or '')
-        hmac_key = base64.b64decode(self.secret_key)
-        signature = hmac.new(hmac_key, message.encode('utf-8'), hashlib.sha256).digest()
-        signature_b64 = base64.encodebytes(signature).decode('utf-8').rstrip('\n')
+API_HOST = "api.coinbase.com"
+API_BASE_PATH = "/api/v3/brokerage"
+API_URL = f"https://{API_HOST}{API_BASE_PATH}"
+DEFAULT_TIMEOUT_SECONDS = 10
+DEFAULT_QUOTE_INCREMENT = "0.01"
+DEFAULT_BASE_INCREMENT = "0.00000001"
 
-        request.headers.update({
-            'CB-ACCESS-SIGN': signature_b64,
-            'CB-ACCESS-TIMESTAMP': timestamp,
-            'CB-ACCESS-KEY': self.api_key,
-            'CB-ACCESS-PASSPHRASE': self.passphrase,
-            'Content-Type': 'application/json'
-        })
+
+class CoinbaseBotError(Exception):
+    """Base exception for bot failures."""
+
+
+class ConfigurationError(CoinbaseBotError):
+    """Raised when required configuration is missing."""
+
+
+class CoinbaseAPIError(CoinbaseBotError):
+    """Raised when the brokerage request fails."""
+
+
+@dataclass(frozen=True)
+class CoinbaseCredentials:
+    api_key: str
+    api_secret: str
+
+
+def load_credentials(required: bool = False) -> CoinbaseCredentials | None:
+    """Load Advanced Trade credentials from the environment."""
+    if load_dotenv is not None:
+        load_dotenv()
+
+    api_key = os.getenv("CB_API_KEY")
+    api_secret = os.getenv("CB_API_SECRET")
+    values = {
+        "CB_API_KEY": api_key,
+        "CB_API_SECRET": api_secret,
+    }
+    missing = [key for key, value in values.items() if not value]
+    if missing:
+        if required:
+            raise ConfigurationError(
+                f"Missing Coinbase credentials: {', '.join(missing)}."
+            )
+        return None
+
+    normalized_secret = api_secret.replace("\\n", "\n")
+    return CoinbaseCredentials(api_key=api_key, api_secret=normalized_secret)
+
+
+def _decimal(value: Decimal | float | int | str) -> Decimal:
+    return Decimal(str(value))
+
+
+def _quantize_to_increment(
+    value: Decimal | float | int | str,
+    increment: Decimal | float | int | str,
+) -> Decimal:
+    decimal_value = _decimal(value)
+    decimal_increment = _decimal(increment)
+    steps = (decimal_value / decimal_increment).to_integral_value(
+        rounding=ROUND_DOWN
+    )
+    return steps * decimal_increment
+
+
+def _format_for_increment(
+    value: Decimal | float | int | str,
+    increment: Decimal | float | int | str,
+) -> str:
+    decimal_increment = _decimal(increment)
+    quantized_value = _quantize_to_increment(value, decimal_increment)
+    places = max(-decimal_increment.as_tuple().exponent, 0)
+    return f"{quantized_value:.{places}f}"
+
+
+def _format_decimal_string(value: Decimal | float | int | str) -> str:
+    return format(_decimal(value), "f")
+
+
+def parse_positive_decimal(value: str) -> Decimal:
+    try:
+        decimal_value = _decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"Invalid decimal amount: {value}") from exc
+    if decimal_value <= 0:
+        raise ValueError("Amount must be greater than zero.")
+    return decimal_value
+
+
+def _base64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _build_es256_jwt(
+    payload: dict[str, Any],
+    headers: dict[str, Any],
+    private_key: ec.EllipticCurvePrivateKey,
+) -> str:
+    header_segment = _base64url_encode(
+        json.dumps(headers, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    payload_segment = _base64url_encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    signing_input = f"{header_segment}.{payload_segment}".encode("utf-8")
+    signature_der = private_key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+    r_value, s_value = decode_dss_signature(signature_der)
+    signature_raw = r_value.to_bytes(32, "big") + s_value.to_bytes(32, "big")
+    signature_segment = _base64url_encode(signature_raw)
+    return f"{header_segment}.{payload_segment}.{signature_segment}"
+
+
+def calculate_limit_price(
+    reference_price: Decimal | float | int | str,
+    factor: Decimal | float | int | str,
+    side: str,
+    quote_increment: Decimal | float | int | str = DEFAULT_QUOTE_INCREMENT,
+) -> str:
+    normalized_side = side.upper()
+    if normalized_side not in {"BUY", "SELL"}:
+        raise ValueError("side must be 'BUY' or 'SELL'")
+
+    multiplier = (
+        Decimal("1") - _decimal(factor)
+        if normalized_side == "BUY"
+        else Decimal("1") + _decimal(factor)
+    )
+    if multiplier <= 0:
+        raise ValueError("factor results in a non-positive price")
+
+    return _format_for_increment(
+        _decimal(reference_price) * multiplier,
+        quote_increment,
+    )
+
+
+def calculate_size_from_quote(
+    quote_amount: Decimal | float | int | str,
+    limit_price: Decimal | float | int | str,
+    base_increment: Decimal | float | int | str = DEFAULT_BASE_INCREMENT,
+) -> str:
+    if _decimal(limit_price) <= 0:
+        raise ValueError("limit_price must be positive")
+    size = _decimal(quote_amount) / _decimal(limit_price)
+    return _format_for_increment(size, base_increment)
+
+
+def build_market_order(
+    product_id: str,
+    *,
+    side: str = "BUY",
+    quote_size: Decimal | float | int | str | None = None,
+    base_size: Decimal | float | int | str | None = None,
+    client_order_id: str | None = None,
+) -> dict[str, Any]:
+    if (quote_size is None) == (base_size is None):
+        raise ValueError("Provide exactly one of quote_size or base_size.")
+
+    market_ioc: dict[str, str] = {}
+    if quote_size is not None:
+        market_ioc["quote_size"] = _format_decimal_string(quote_size)
+    if base_size is not None:
+        market_ioc["base_size"] = _format_decimal_string(base_size)
+    market_ioc["rfq_disabled"] = True
+
+    return {
+        "client_order_id": client_order_id or str(uuid.uuid4()),
+        "product_id": product_id,
+        "side": side.upper(),
+        "order_configuration": {
+            "market_market_ioc": market_ioc,
+        },
+    }
+
+
+def build_limit_order(
+    product_id: str,
+    *,
+    side: str,
+    quote_amount: Decimal | float | int | str,
+    reference_price: Decimal | float | int | str,
+    price_factor: Decimal | float | int | str = "0.01",
+    base_increment: Decimal | float | int | str = DEFAULT_BASE_INCREMENT,
+    quote_increment: Decimal | float | int | str = DEFAULT_QUOTE_INCREMENT,
+    client_order_id: str | None = None,
+) -> dict[str, Any]:
+    limit_price = calculate_limit_price(
+        reference_price,
+        price_factor,
+        side=side,
+        quote_increment=quote_increment,
+    )
+    base_size = calculate_size_from_quote(
+        quote_amount=quote_amount,
+        limit_price=limit_price,
+        base_increment=base_increment,
+    )
+    return {
+        "client_order_id": client_order_id or str(uuid.uuid4()),
+        "product_id": product_id,
+        "side": side.upper(),
+        "order_configuration": {
+            "limit_limit_gtc": {
+                "base_size": base_size,
+                "limit_price": limit_price,
+                "post_only": False,
+                "rfq_disabled": True,
+            }
+        },
+    }
+
+
+class CoinbaseAdvancedTradeAuth(AuthBase):
+    def __init__(self, credentials: CoinbaseCredentials):
+        self.api_key = credentials.api_key
+        self.private_key = serialization.load_pem_private_key(
+            credentials.api_secret.encode("utf-8"),
+            password=None,
+        )
+
+    def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
+        url = urlsplit(request.url)
+        path_with_query = url.path
+        if url.query:
+            path_with_query = f"{path_with_query}?{url.query}"
+
+        payload = {
+            "sub": self.api_key,
+            "iss": "cdp",
+            "nbf": int(time.time()),
+            "exp": int(time.time()) + 120,
+            "uri": f"{request.method} {API_HOST}{path_with_query}",
+        }
+        headers = {
+            "alg": "ES256",
+            "kid": self.api_key,
+            "nonce": secrets.token_hex(),
+            "typ": "JWT",
+        }
+        request.headers.update(
+            {
+                "Authorization": f"Bearer {_build_es256_jwt(payload, headers, self.private_key)}",
+                "Content-Type": "application/json",
+            }
+        )
         return request
 
-api_url = 'https://api.pro.coinbase.com/'
-auth = CoinbaseExchangeAuth(config_dict["key"], config_dict["secret"], config_dict["passphrase"])
 
-# Get accounts
-def get_accounts():
-    r = requests.get(api_url + 'accounts', auth=auth)
-    return r.json()
+class CoinbaseAdvancedTradeClient:
+    def __init__(
+        self,
+        credentials: CoinbaseCredentials | None = None,
+        *,
+        live_mode: bool = False,
+        timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        session: requests.Session | None = None,
+    ) -> None:
+        self.credentials = credentials
+        self.live_mode = live_mode
+        self.timeout_seconds = timeout_seconds
+        self.session = session or requests.Session()
+        self.session.headers.update(
+            {
+                "Accept": "application/json",
+                "Cache-Control": "no-cache",
+                "User-Agent": "tradingBot/advanced-trade",
+            }
+        )
+        self.auth = CoinbaseAdvancedTradeAuth(credentials) if credentials else None
 
-# Get payment methods
-def get_payment_methods():
-    r = requests.get(api_url + 'payment-methods', auth=auth)
-    print(r.json())
-    return r.json()
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        live_mode: bool = False,
+        timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    ) -> "CoinbaseAdvancedTradeClient":
+        credentials = load_credentials(required=live_mode)
+        return cls(
+            credentials=credentials,
+            live_mode=live_mode,
+            timeout_seconds=timeout_seconds,
+        )
 
-# Make a deposit
-def make_deposit(amount):
-    payment = get_payment_methods()
-    deposit = {
-        'amount': amount,
-        'currency': 'USD',
-        'payment_method_id': payment[0]['id']
-    }
-    print(deposit)
-    deposit = json.dumps(deposit)
-    r = requests.post(api_url + 'deposits/payment-method', data=deposit, auth=auth)
-    print(r.json())
-    return r.json()
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        auth_required: bool = False,
+        params: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> Any:
+        auth = None
+        if auth_required:
+            if self.auth is None:
+                raise ConfigurationError("This action requires Coinbase credentials.")
+            auth = self.auth
 
-def get_currency_balance():
-    pass
+        request_path = f"{API_BASE_PATH}/{path.lstrip('/')}"
+        url = f"https://{API_HOST}{request_path}"
+        try:
+            response = self.session.request(
+                method=method.upper(),
+                url=url,
+                params=params,
+                json=payload,
+                auth=auth,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            detail = exc.response.text if exc.response is not None else str(exc)
+            raise CoinbaseAPIError(
+                f"{method.upper()} {path} failed: {detail}"
+            ) from exc
+        except requests.RequestException as exc:
+            raise CoinbaseAPIError(
+                f"{method.upper()} {path} failed: {exc}"
+            ) from exc
 
-# Check price
-def check_price(currency, quote='USD'):
-    '''
-    currency: the target cryptocurrencies (i.e. ['BTC', 'ETH'])
-    quote: the other side of the pair (e.g. USD)
-    '''
-    price_dict = {}
-    for ticker in currency:
-        r = requests.get(api_url + 'products/'+ticker+'-'+quote+'/ticker')
-        r = r.json()
-        price_dict.update({ticker: float(r['price'])})
+        if not response.content:
+            return {}
 
-    price_dict.update({'time': r['time']})
-    return price_dict
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise CoinbaseAPIError(
+                f"{method.upper()} {path} returned non-JSON content."
+            ) from exc
 
-# Place LIMIT BUY order
-def place_limit_buy(price_dict, ticker1, ticker2, amount, factor=.01):
-    limit_price = round(float(f"{(price_dict[ticker] - (price_dict[ticker] * factor)):.2f}"),2)
-    print(limit_price)
-    if ticker == 'BTC': 
-        amount = round(float(f"{(amount/limit_price):.8f}"),8)
-    else: 
-        amount = round(float(f"{(amount/limit_price):.2f}"),2)
-    print(amount)
-    order = {
-        'size': amount,
-        'price': limit_price,
-        'side': 'buy',
-        'product_id': ticker1+'-USD'
-    }
-    order = json.dumps(order)
-    r = requests.post(api_url + 'orders', data=order, auth=auth)
-    print(r.json())
-    # {"id": "0428b97b-bec1-429e-a94c-59992926778d"}
+    def _submit_private_action(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any],
+    ) -> Any:
+        if not self.live_mode:
+            return {
+                "dry_run": True,
+                "method": method.upper(),
+                "path": path,
+                "payload": payload,
+            }
+        return self._request(
+            method,
+            path,
+            auth_required=True,
+            payload=payload,
+        )
 
-# Place MARKET BUY order
-def place_market_buy(funds, ticker1, ticker2):
-    order = {
-        'type': 'market',
-        'funds': funds,
-        'side': 'buy',
-        'product_id': ticker1+'-'+ticker2
-    }
-    order = json.dumps(order)
-    r = requests.post(api_url + 'orders', data=order, auth=auth)
-    print(r.json())
+    def get_accounts(self) -> list[dict[str, Any]]:
+        accounts: list[dict[str, Any]] = []
+        cursor: str | None = None
 
-# place SELL order
-def place_sell_order(price_dict, ticker, amount, factor=.01):
-    limit_price = round(float(f"{(price_dict[ticker] + (price_dict[ticker] * factor)):.2f}"), 2)
-    print(limit_price)
-    if ticker == 'BTC': 
-        amount = round(float(f"{(amount/limit_price):.8f}"),8)
-    else: 
-        amount = round(float(f"{(amount/limit_price):.2f}"),2)
-    print(amount)
-    order = {
-        'size': amount,
-        'price': limit_price,
-        'side': 'sell',
-        'product_id': ticker+'-USD'
-    }
-    order = json.dumps(order)
-    r = requests.post(api_url + 'orders', data=order, auth=auth)
-    print(r.json())
-    # {"id": "0428b97b-bec1-429e-a94c-59992926778d"}
+        while True:
+            params: dict[str, Any] = {"limit": 250}
+            if cursor:
+                params["cursor"] = cursor
+            response = self._request(
+                "GET",
+                "accounts",
+                auth_required=True,
+                params=params,
+            )
+            accounts.extend(response.get("accounts", []))
+            if not response.get("has_next"):
+                break
+            cursor = response.get("cursor")
+            if not cursor:
+                break
 
-def get_open_orders():
-    pass
+        return accounts
 
-def cancel_order():
-    pass
+    def get_balances(self, *, non_zero_only: bool = True) -> list[dict[str, Any]]:
+        accounts = self.get_accounts()
+        if not non_zero_only:
+            return accounts
+        return [
+            account
+            for account in accounts
+            if _decimal(account.get("available_balance", {}).get("value", "0")) > 0
+        ]
 
-def cancel_last_order():
-    pass
+    def get_product(self, product_id: str) -> dict[str, Any]:
+        return self._request("GET", f"market/products/{product_id}")
 
-def cancel_all_orders():
-    pass
+    def get_ticker(self, product_id: str) -> dict[str, Any]:
+        return self._request("GET", f"market/products/{product_id}/ticker")
 
-# Cascading BUYS; buy more as price dips, sell more as price increases
-def cascading_buys(price_dict, ticker, usd, rounds, factor=0.02, factor_adder=0.02):
-    current_price = price_dict[ticker]
-    total_cost = 0
-    total_amount = 0
-    for i in range(0, rounds):
-        limit_price = round(float(f"{(current_price - (current_price * factor)):.2f}"), 2)
-        if ticker == ('BTC' or 'ETH'): 
-            amount = round(float(f"{(usd/limit_price):.8f}"), 8)
-        else: 
-            amount = round(float(f"{(usd/limit_price):.2f}"), 2)
+    def check_prices(
+        self,
+        symbols: Iterable[str],
+        quote: str = "USD",
+    ) -> dict[str, float | str]:
+        prices: dict[str, float | str] = {}
+        last_time = None
+        for symbol in symbols:
+            product_id = f"{symbol}-{quote}"
+            ticker = self.get_ticker(product_id)
+            trades = ticker.get("trades", [])
+            if trades:
+                latest_trade = max(
+                    trades,
+                    key=lambda trade: trade.get("time", ""),
+                )
+                prices[symbol] = float(latest_trade["price"])
+                last_time = latest_trade.get("time", last_time)
+            else:
+                product = self.get_product(product_id)
+                prices[symbol] = float(product["price"])
 
-        order = {
-            'size': amount,
-            'price': limit_price,
-            'side': 'buy',
-            'product_id': ticker+'-USD'
-        }
-        print('Order '+str(i)+':')
-        print('$'+str(usd)+' BUY order for '+str(amount)+' '+ticker+' at limit price: $'+str(limit_price))
-        total_cost = total_cost + usd
-        total_amount = total_amount + amount
-        factor = factor + factor_adder
-        usd = round(float(usd + (usd * factor)), 2) + 3
-        order = json.dumps(order)
-        # # !!! THIS IS WHERE THE MAGIC HAPPENS !!! # #
-        r = requests.post(api_url + 'orders', data=order, auth=auth)
-        print(r.json())
-        time.sleep(.01)
-        
-    print('TOTAL COST: $' + str(round(float(total_cost), 2)))
-    print('AMOUNT ON ORDER: ' + str(round(float(total_amount), 2)))
+        if last_time is not None:
+            prices["time"] = last_time
+        return prices
 
-def cascading_sells(price_dict, ticker, usd, rounds, factor=0.20, factor_adder=.01):
-    current_price = price_dict[ticker]
-    total_cost = 0
-    total_amount = 0
-    for i in range(0, rounds):
-        limit_price = round(float(f"{(current_price + (current_price * factor)):.2f}"), 2)
-        if ticker == 'BTC' or 'ETH': 
-            amount = round(float(f"{(usd/limit_price):.8f}"), 8)
-        else: 
-            amount = round(float(f"{(usd/limit_price):.4f}"), 4)
+    def build_market_buy_order(
+        self,
+        product_id: str,
+        *,
+        funds: Decimal | float | int | str,
+    ) -> dict[str, Any]:
+        return build_market_order(
+            product_id,
+            side="BUY",
+            quote_size=funds,
+        )
 
-        order = {
-            'size': amount,
-            'price': limit_price,
-            'side': 'sell',
-            'product_id': ticker+'-USD'
-        }
-        print('Order '+str(i)+':')
-        print('$'+str(usd)+' SELL order for '+str(amount)+' '+ticker+' at limit price: $'+str(limit_price))
-        total_cost = total_cost + usd
-        total_amount = total_amount + amount
-        factor = factor + factor_adder
-        usd = round(float(usd + (usd * factor)), 2) + 3
-        order = json.dumps(order)
-        # !!! THIS IS WHERE THE MAGIC HAPPENS !!! # 
-        r = requests.post(api_url + 'orders', data=order, auth=auth)
-        print(r.json())
-        time.sleep(1)
-        
-    print('TOTAL COST: $' + str(round(float(total_cost), 2)))
-    print('AMOUNT ON ORDER: ' + str(round(float(total_amount), 2)))
-
-# Use Indicators here
-
-# TO-DO add logging
-
-
-
-## main
-price_dict = check_price(['BTC', 'ETH', 'LINK'])
-make_deposit(20)
-# time.sleep(20)
-# for key in price_dict:
-#     print(ke y + ': $' + str(price_dict[key]))
-# place_buy_order(price_dict, 'LINK', 28, .14)
-# place_sell_order(price_dict, 'LINK', 25, .01)
-# cascading_buys(price_dict, 'LINK', 50, 6, .05, .005)
-
-# AUTO DCA
-hour = 3600
-day = hour * 24
-flag = 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-for i in range(0, 28):
-    if flag == 0:
-        place_market_buy(10, 'LINK', 'USD')
-        flag = 1
-    elif flag == 1:
-        place_market_buy(10, 'GRT', 'USD')
-        flag = 2
-    elif flag == 2:
-        place_market_buy(10, 'BTC', 'USD')
-        flag = 0
-    elif flag == 3:
-        place_market_buy(10, 'ETH', 'USD')
-        flag = 0
-    elif flag == 4
-        place_market_buy(10, 'SNX', 'USD')
-        flag = 0
-    print("Buy #" + str(i+1))
-    current_time = time.strftime("%H:%M:%S %D", time.localtime())
-    print(current_time)
-    time.sleep(hour*6)
+    def place_market_order(
+        self,
+        product_id: str,
+        *,
+        funds: Decimal | float | int | str | None = None,
+        base_size: Decimal | float | int | str | None = None,
+        side: str = "BUY",
+    ) -> Any:
+        normalized_side = side.upper()
+        if normalized_side == "BUY":
+            if funds is None:
+                raise ValueError("BUY market orders require funds.")
+            payload = build_market_order(
+                product_id,
+                side="BUY",
+                quote_size=funds,
+            )
+        else:
+            sell_size = base_size if base_size is not None else funds
+            if sell_size is None:
+                raise ValueError("SELL market orders require base_size.")
+            payload = build_market_order(
+                product_id,
+                side="SELL",
+                base_size=sell_size,
+            )
+        return self._submit_private_action("POST", "orders", payload)

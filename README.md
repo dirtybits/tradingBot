@@ -1,24 +1,67 @@
 # tradingBot
 
-An automated trading bot for Coinbase Pro, will:
-- teach you about programming
-- help you learn about finance
-- help you understand exchanges
-- be able to automate your trades 
+A small Coinbase Advanced Trade CLI for:
+- public price lookups
+- authenticated balance queries
+- dry-run market buy payload generation
+- guarded live market buys
+- websocket ticker snapshots
 
-'tradingBot/cbpro.py' is where much of the magic happens, the other files are auxillary.
-This tool can be built out to work for multiple exchanges and in the future, defi protocols.
+Core files:
+- `cbpro.py`: Advanced Trade REST client and auth helpers
+- `webfeed.py`: Advanced Trade websocket helpers
+- `bot.py`: CLI entrypoint
+- `strategies.py`: pure strategy helpers
 
-Happy trading!
-# use
-First add system environment variables for the given exchange
-ex
+## Setup
+
+Install dependencies:
+
+```bash
+python3 -m pip install -r requirements.txt
 ```
-api_key = os.environ['CB_API_KEY']
-secret_key = os.environ['CB_SECRET_KEY']
-passphrase = os.environ['CB_PASSPHRASE']
+
+Set Advanced Trade credentials in your environment or `.env`:
+
+```bash
+CB_API_KEY="organizations/{org_id}/apiKeys/{key_id}"
+CB_API_SECRET="-----BEGIN EC PRIVATE KEY-----\nYOUR PRIVATE KEY\n-----END EC PRIVATE KEY-----\n"
 ```
-# prerequisite
-WIP
+
+Notes:
+- Use an Advanced Trade CDP API key, not old Coinbase Pro credentials.
+- The private key must preserve newlines. Escaped `\n` values in `.env` are supported.
+
+## Usage
+
+Fetch prices:
+
+```bash
+python3 bot.py price BTC ETH --quote USD
+```
+
+List balances:
+
+```bash
+python3 bot.py balances
+```
+
+Generate a local dry-run market-buy payload:
+
+```bash
+python3 bot.py paper-buy BTC-USD --funds 10
+```
+
+Place a live buy:
+
+```bash
+python3 bot.py live-buy BTC-USD --funds 10 --confirm-live
+```
+
+Fetch one websocket ticker update per product:
+
+```bash
+python3 bot.py feed BTC-USD ETH-USD
+```
 
 
