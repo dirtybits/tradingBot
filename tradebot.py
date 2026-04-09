@@ -98,9 +98,9 @@ _DCA_RUN_EPILOG = textwrap.dedent("""\
     sqlite ledger so repeated same-day runs skip already-submitted assets.
 
     Examples:
-      tradebot dca run --config dca.example.json
-      tradebot dca run --config dca.example.json --date 2026-04-08
-      tradebot dca run --config dca.example.json --live --yes
+      tradebot dca run --config dca.example.yaml
+      tradebot dca run --config dca.example.yaml --date 2026-04-08
+      tradebot dca run --config dca.example.yaml --live --yes
 """)
 
 
@@ -355,7 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     dca_run_parser.add_argument(
         "--config",
         required=True,
-        help="Path to DCA config (.json or .toml)",
+        help="Path to DCA config (.yaml, .yml, .json, or .toml)",
     )
     dca_run_parser.add_argument(
         "--date",

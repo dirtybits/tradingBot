@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from cbpro import CoinbaseAdvancedTradeClient, parse_positive_decimal
+import yaml
 
 try:
     import tomllib
@@ -33,6 +34,7 @@ class DcaAsset:
 class DcaConfig:
     assets: list[DcaAsset]
     state_path: Path
+    min_quote_buffer: Decimal
 
 
 def _parse_non_negative_decimal(value: Any, field_name: str) -> Decimal:
@@ -47,20 +49,23 @@ def _parse_non_negative_decimal(value: Any, field_name: str) -> Decimal:
 
 def _load_config_document(path: Path) -> dict[str, Any]:
     suffix = path.suffix.lower()
+    if suffix in {".yaml", ".yml"}:
+        loaded = yaml.safe_load(path.read_text())
+        return loaded if loaded is not None else {}
     if suffix == ".json":
         return json.loads(path.read_text())
     if suffix == ".toml":
         if tomllib is None:
             raise ValueError("TOML config support requires Python 3.11+.")
         return tomllib.loads(path.read_text())
-    raise ValueError("Config file must end in .json or .toml.")
+    raise ValueError("Config file must end in .yaml, .yml, .json, or .toml.")
 
 
 def load_dca_config(path: str | os.PathLike[str]) -> DcaConfig:
     config_path = Path(path).expanduser()
     raw = _load_config_document(config_path)
     if not isinstance(raw, dict):
-        raise ValueError("DCA config must be a JSON/TOML object.")
+        raise ValueError("DCA config must be a YAML/JSON/TOML object.")
 
     raw_assets = raw.get("assets")
     if not isinstance(raw_assets, list) or not raw_assets:
@@ -71,6 +76,10 @@ def load_dca_config(path: str | os.PathLike[str]) -> DcaConfig:
         "discount",
     )
     default_post_only = bool(raw.get("post_only", True))
+    min_quote_buffer = _parse_non_negative_decimal(
+        raw.get("min_quote_buffer", "0"),
+        "min_quote_buffer",
+    )
     raw_state_path = raw.get("state_path")
     state_path = (
         Path(str(raw_state_path)).expanduser()
@@ -103,7 +112,11 @@ def load_dca_config(path: str | os.PathLike[str]) -> DcaConfig:
             )
         )
 
-    return DcaConfig(assets=assets, state_path=state_path)
+    return DcaConfig(
+        assets=assets,
+        state_path=state_path,
+        min_quote_buffer=min_quote_buffer,
+    )
 
 
 class DcaLedger:
@@ -205,6 +218,66 @@ def _result_status(result: dict[str, Any]) -> str:
     return "submitted"
 
 
+def _asset_quote_currency(product_id: str) -> str:
+    _, _, quote = product_id.partition("-")
+    return quote or "USD"
+
+
+def _available_quote_balances(
+    client: CoinbaseAdvancedTradeClient,
+) -> dict[str, Decimal]:
+    balances: dict[str, Decimal] = {}
+    for account in client.get_balances(non_zero_only=False):
+        currency = str(account.get("currency", "")).upper()
+        available_value = account.get("available_balance", {}).get("value", "0")
+        try:
+            balances[currency] = Decimal(str(available_value))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+    return balances
+
+
+def _required_quote_balances(config: DcaConfig) -> dict[str, Decimal]:
+    required: dict[str, Decimal] = {}
+    for asset in config.assets:
+        quote = _asset_quote_currency(asset.product_id).upper()
+        required[quote] = required.get(quote, Decimal("0")) + asset.funds
+    for quote in list(required):
+        required[quote] += config.min_quote_buffer
+    return required
+
+
+def _preflight_quote_balances(
+    client: CoinbaseAdvancedTradeClient,
+    config: DcaConfig,
+) -> dict[str, Any] | None:
+    required = _required_quote_balances(config)
+    available = _available_quote_balances(client)
+    shortfalls: list[dict[str, str]] = []
+
+    for quote, required_amount in required.items():
+        available_amount = available.get(quote, Decimal("0"))
+        if available_amount < required_amount:
+            shortfalls.append(
+                {
+                    "quote": quote,
+                    "available": str(available_amount),
+                    "required": str(required_amount),
+                    "shortfall": str(required_amount - available_amount),
+                }
+            )
+
+    if not shortfalls:
+        return None
+
+    return {
+        "status": "insufficient_funds",
+        "available_balances": {quote: str(amount) for quote, amount in available.items()},
+        "required_balances": {quote: str(amount) for quote, amount in required.items()},
+        "shortfalls": shortfalls,
+    }
+
+
 def execute_dca(
     client: CoinbaseAdvancedTradeClient,
     config: DcaConfig,
@@ -215,6 +288,24 @@ def execute_dca(
     effective_date = (run_date or date.today()).isoformat()
     ledger = DcaLedger(config.state_path)
     results: list[dict[str, Any]] = []
+
+    if live_mode:
+        preflight = _preflight_quote_balances(client, config)
+        if preflight is not None:
+            return {
+                "command": "dca run",
+                "run_date": effective_date,
+                "live_mode": live_mode,
+                "state_path": str(config.state_path),
+                "results": results,
+                "summary": {
+                    "submitted": 0,
+                    "previewed": 0,
+                    "skipped": 0,
+                    "failed": len(config.assets),
+                },
+                **preflight,
+            }
 
     for asset in config.assets:
         existing = ledger.get_entry(effective_date, asset.product_id)

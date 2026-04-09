@@ -1,0 +1,11 @@
+discount: 0.01
+post_only: true
+min_quote_buffer: 0
+state_path: ~/.tradebot/dca.sqlite
+assets:
+  - product_id: BTC-USD
+    funds: 10
+  - product_id: ETH-USD
+    funds: 10
+  - product_id: SOL-USD
+    funds: 10

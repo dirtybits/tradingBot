@@ -11,6 +11,7 @@ dependencies = [
     "websockets",
     "python-dotenv",
     "cryptography",
+    "pyyaml>=6.0.3",
 ]
 
 [tool.setuptools]

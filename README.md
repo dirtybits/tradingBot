@@ -118,33 +118,37 @@ not submit duplicates for the same asset/date.
 
 ```bash
 # Paper mode preview
-tradebot dca run --config dca.example.json
+tradebot dca run --config dca.example.yaml
 
 # Backfill or test a specific day
-tradebot dca run --config dca.example.json --date 2026-04-08
+tradebot dca run --config dca.example.yaml --date 2026-04-08
 
 # Live run
-tradebot dca run --config dca.example.json --live --yes
+tradebot dca run --config dca.example.yaml --live --yes
 ```
 
 Example config:
 
-```json
-{
-  "discount": 0.01,
-  "post_only": true,
-  "state_path": "~/.tradebot/dca.sqlite",
-  "assets": [
-    { "product_id": "BTC-USD", "funds": 10 },
-    { "product_id": "ETH-USD", "funds": 10 },
-    { "product_id": "SOL-USD", "funds": 10 }
-  ]
-}
+```yaml
+discount: 0.01
+post_only: true
+min_quote_buffer: 0
+state_path: ~/.tradebot/dca.sqlite
+assets:
+  - product_id: BTC-USD
+    funds: 10
+  - product_id: ETH-USD
+    funds: 10
+  - product_id: SOL-USD
+    funds: 10
 ```
 
 Notes:
+- YAML is the recommended DCA config format, though `.json` and `.toml` also work.
 - `discount` is a percent below market, so `0.01` means `0.01%`, not `1%`.
 - `post_only: true` makes each order maker-or-cancel.
+- Live runs fail safely before placing any orders if quote balances are too low.
+- `min_quote_buffer` lets you reserve extra USD beyond the configured buys.
 - The sqlite ledger only records live submissions; paper runs stay repeatable.
 
 ### Cron
@@ -152,7 +156,7 @@ Notes:
 Use cron to run the DCA job once per day. Example: 9:00 AM local time.
 
 ```cron
-0 9 * * * cd /absolute/path/to/tradingBot && /absolute/path/to/tradingBot/.venv/bin/tradebot dca run --config /absolute/path/to/tradingBot/dca.example.json --live --yes >> ~/.tradebot/dca.log 2>&1
+0 9 * * * cd /absolute/path/to/tradingBot && /absolute/path/to/tradingBot/.venv/bin/tradebot dca run --config /absolute/path/to/tradingBot/dca.example.yaml --live --yes >> ~/.tradebot/dca.log 2>&1
 ```
 
 Tips:

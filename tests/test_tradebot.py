@@ -229,7 +229,7 @@ class DcaCliTests(unittest.TestCase):
         with patch.object(
             sys,
             "argv",
-            ["tradebot", "dca", "run", "--config", "dca.example.json", "--live"],
+            ["tradebot", "dca", "run", "--config", "dca.example.yaml", "--live"],
         ):
             with redirect_stderr(stderr):
                 with self.assertRaises(SystemExit) as exc:
@@ -254,14 +254,14 @@ class DcaCliTests(unittest.TestCase):
         with patch.object(
             sys,
             "argv",
-            ["tradebot", "dca", "run", "--config", "dca.example.json", "--date", "2026-04-08"],
+            ["tradebot", "dca", "run", "--config", "dca.example.yaml", "--date", "2026-04-08"],
         ):
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 rc = main()
 
         self.assertEqual(rc, 0)
         from_env.assert_called_once_with(live_mode=False)
-        load_config.assert_called_once_with("dca.example.json")
+        load_config.assert_called_once_with("dca.example.yaml")
         execute_dca.assert_called_once()
         output = json.loads(stdout.getvalue())
         self.assertEqual(output["summary"]["previewed"], 3)
