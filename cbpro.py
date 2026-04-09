@@ -245,16 +245,12 @@ class CoinbaseAdvancedTradeAuth(AuthBase):
 
     def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
         url = urlsplit(request.url)
-        path_with_query = url.path
-        if url.query:
-            path_with_query = f"{path_with_query}?{url.query}"
-
         payload = {
             "sub": self.api_key,
             "iss": "cdp",
             "nbf": int(time.time()),
             "exp": int(time.time()) + 120,
-            "uri": f"{request.method} {API_HOST}{path_with_query}",
+            "uri": f"{request.method} {API_HOST}{url.path}",
         }
         headers = {
             "alg": "ES256",
