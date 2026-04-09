@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 
 from cbpro import CoinbaseAdvancedTradeClient, CoinbaseBotError, parse_positive_decimal
 from webfeed import CoinbaseWebsocketError, collect_latest_prices
@@ -61,6 +62,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def print_live_buy_summary(result: object) -> None:
+    if not isinstance(result, dict):
+        return
+
+    order = result.get("order")
+    if not isinstance(order, dict):
+        return
+
+    filled_size = order.get("filled_size")
+    average_price = order.get("average_filled_price")
+    success_response = result.get("success_response")
+    response_product_id = (
+        success_response.get("product_id")
+        if isinstance(success_response, dict)
+        else None
+    )
+    product_id = order.get("product_id") or response_product_id or "order"
+    status = order.get("status")
+    base_currency, _, quote_currency = str(product_id).partition("-")
+
+    if filled_size and average_price:
+        print(
+            f"Bought {filled_size} {base_currency} at {average_price} {quote_currency} per {base_currency}.",
+            file=sys.stderr,
+        )
+        return
+
+    if status:
+        print(
+            f"Submitted {product_id} buy order; fill details are not available yet.",
+            file=sys.stderr,
+        )
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -83,6 +118,7 @@ def main() -> int:
                 )
             client = CoinbaseAdvancedTradeClient.from_env(live_mode=True)
             result = client.place_market_order(args.product_id, funds=args.funds)
+            print_live_buy_summary(result)
         else:
             result = asyncio.run(collect_latest_prices(args.product_ids))
     except (CoinbaseBotError, CoinbaseWebsocketError) as exc:
