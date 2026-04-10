@@ -1,4 +1,4 @@
-discount: 0.01
+discount: 0.05
 post_only: true
 min_quote_buffer: 0
 state_path: ~/.tradebot/dca.sqlite
