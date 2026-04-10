@@ -20,7 +20,13 @@ source .venv/bin/activate
 uv pip install -e .
 ```
 
-The `-e .` install makes `tradebot` available as a command. Set credentials in your environment or `.env`:
+The `-e .` install makes `tradebot` available as a command inside the venv. To use it without activating the venv each time, add the venv's `bin` directory to your `PATH` permanently in your shell config (e.g. `~/.zshrc` or `~/.bashrc`):
+
+```bash
+echo 'export PATH="/absolute/path/to/tradingBot/.venv/bin:$PATH"' >> ~/.zshrc
+```
+
+Set credentials in your environment or `.env`:
 
 ```bash
 CB_API_KEY="organizations/{org_id}/apiKeys/{key_id}"

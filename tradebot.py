@@ -82,12 +82,15 @@ _FEED_EPILOG = textwrap.dedent("""\
 _SIGNAL_EPILOG = textwrap.dedent("""\
     Fetches recent candles from the REST API and computes a buy/sell/hold signal.
     Strategies:
-      crossover  Moving-average crossover (short MA vs long MA)
-      rsi        Relative Strength Index
+      crossover   Moving-average crossover (short MA vs long MA)
+      rsi         Relative Strength Index (Wilder EMA smoothing)
+      trend-rsi   RSI gated by a trend SMA — only acts when RSI agrees with trend
 
     Examples:
       tradebot signal BTC-USD
       tradebot signal BTC-USD --strategy rsi
+      tradebot signal BTC-USD --strategy trend-rsi
+      tradebot signal BTC-USD --strategy trend-rsi --trend-window 50 --candles 100
       tradebot signal ETH-USD --strategy crossover --short-window 5 --long-window 20
       tradebot signal BTC-USD --strategy rsi --candles 50 --period 14 --oversold 30 --overbought 70
       tradebot signal BTC-USD --granularity FIFTEEN_MINUTE --candles 100
@@ -288,9 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     signal_parser.add_argument("product_id", help="Product such as BTC-USD")
     signal_parser.add_argument(
         "--strategy",
-        choices=["crossover", "rsi"],
+        choices=["crossover", "rsi", "trend-rsi"],
         default="crossover",
-        help="Strategy: crossover or rsi (default: crossover)",
+        help="Strategy: crossover, rsi, or trend-rsi (default: crossover)",
     )
     signal_parser.add_argument(
         "--candles",
@@ -342,6 +345,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=70.0,
         metavar="THRESHOLD",
         help="RSI overbought threshold → sell signal (default: 70)",
+    )
+    signal_parser.add_argument(
+        "--trend-window",
+        type=int,
+        default=20,
+        metavar="N",
+        help="SMA window for trend filter in trend-rsi strategy (default: 20); --candles must exceed this value",
     )
 
     # orders ------------------------------------------------------------------
@@ -536,6 +546,7 @@ def _compute_signal(args: argparse.Namespace, prices: list[float]) -> dict[str, 
         moving_average_crossover_signal,
         rsi_signal,
         simple_moving_average,
+        trend_rsi_signal,
     )
 
     result: dict[str, Any] = {
@@ -553,7 +564,7 @@ def _compute_signal(args: argparse.Namespace, prices: list[float]) -> dict[str, 
         result["long_ma"] = round(simple_moving_average(prices, args.long_window), 8)
         result["short_window"] = args.short_window
         result["long_window"] = args.long_window
-    else:  # rsi
+    elif args.strategy == "rsi":
         result["signal"] = rsi_signal(
             prices, period=args.period, oversold=args.oversold, overbought=args.overbought
         )
@@ -561,6 +572,21 @@ def _compute_signal(args: argparse.Namespace, prices: list[float]) -> dict[str, 
         result["period"] = args.period
         result["oversold"] = args.oversold
         result["overbought"] = args.overbought
+    else:  # trend-rsi
+        result["signal"] = trend_rsi_signal(
+            prices,
+            period=args.period,
+            oversold=args.oversold,
+            overbought=args.overbought,
+            trend_window=args.trend_window,
+        )
+        result["rsi"] = round(latest_relative_strength_index(prices, period=args.period), 2)
+        result["trend_ma"] = round(simple_moving_average(prices, args.trend_window), 8)
+        result["price"] = prices[-1]
+        result["period"] = args.period
+        result["oversold"] = args.oversold
+        result["overbought"] = args.overbought
+        result["trend_window"] = args.trend_window
 
     return result
 
