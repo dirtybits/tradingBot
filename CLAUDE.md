@@ -63,6 +63,60 @@ assets:
 
 Supports `.yaml`, `.yml`, `.json`, and `.toml`.
 
+## MCP server
+
+`mcp_server.py` exposes all tradebot functionality as MCP tools so Claude agents on this machine can call them natively instead of via shell.
+
+**Tools:** `get_price`, `get_balances`, `get_signal`, `place_market_buy`, `place_market_sell`, `place_limit_buy`, `place_limit_sell`, `get_open_orders`, `run_dca`
+
+All order tools default to `live=False` (paper mode). Agents must pass `live=True` explicitly and should confirm with the user first.
+
+**Register in Claude Code** — add to `~/.claude/claude_desktop_config.json` (or the equivalent MCP settings file):
+
+```json
+{
+  "mcpServers": {
+    "tradebot": {
+      "command": "python",
+      "args": ["/home/analogic/Repos/tradingBot/mcp_server.py"],
+      "env": {
+        "CB_API_KEY": "<your key>",
+        "CB_API_SECRET": "<your secret>"
+      }
+    }
+  }
+}
+```
+
+Or with `uv` (recommended, uses the project venv):
+
+```json
+{
+  "mcpServers": {
+    "tradebot": {
+      "command": "uv",
+      "args": ["run", "--project", "/home/analogic/Repos/tradingBot", "python", "mcp_server.py"]
+    }
+  }
+}
+```
+
+## Signal-gated DCA
+
+Add a `signal_strategy` field to your DCA config to skip assets whose signal isn't `"buy"`:
+
+```yaml
+signal_strategy: trend-rsi
+signal_granularity: ONE_HOUR
+signal_candles: 60          # must exceed signal_trend_window
+signal_trend_window: 20
+assets:
+  - product_id: BTC-USD
+    funds: 15
+```
+
+Skipped assets appear in results with `"status": "skipped_signal"` and are not recorded in the ledger (they'll be re-evaluated next run).
+
 ## Common commands
 
 ```bash

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from cbpro import CoinbaseAdvancedTradeClient, parse_positive_decimal
+from strategies import moving_average_crossover_signal, rsi_signal, trend_rsi_signal
 import yaml
 
 try:
@@ -30,11 +31,25 @@ class DcaAsset:
     post_only: bool
 
 
+_VALID_SIGNAL_STRATEGIES = {"crossover", "rsi", "trend-rsi"}
+_VALID_GRANULARITIES = {
+    "ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE", "THIRTY_MINUTE",
+    "ONE_HOUR", "TWO_HOUR", "SIX_HOUR", "ONE_DAY",
+}
+
+
 @dataclass(frozen=True)
 class DcaConfig:
     assets: list[DcaAsset]
     state_path: Path
     min_quote_buffer: Decimal
+    signal_strategy: str | None = None
+    signal_granularity: str = "ONE_HOUR"
+    signal_candles: int = 50
+    signal_period: int = 14
+    signal_oversold: float = 30.0
+    signal_overbought: float = 70.0
+    signal_trend_window: int = 20
 
 
 def _parse_non_negative_decimal(value: Any, field_name: str) -> Decimal:
@@ -112,10 +127,37 @@ def load_dca_config(path: str | os.PathLike[str]) -> DcaConfig:
             )
         )
 
+    signal_strategy = raw.get("signal_strategy")
+    if signal_strategy is not None:
+        signal_strategy = str(signal_strategy)
+        if signal_strategy not in _VALID_SIGNAL_STRATEGIES:
+            raise ValueError(
+                f"signal_strategy must be one of: {', '.join(sorted(_VALID_SIGNAL_STRATEGIES))}"
+            )
+
+    signal_granularity = str(raw.get("signal_granularity", "ONE_HOUR"))
+    if signal_granularity not in _VALID_GRANULARITIES:
+        raise ValueError(
+            f"signal_granularity must be one of: {', '.join(sorted(_VALID_GRANULARITIES))}"
+        )
+
+    signal_candles = int(raw.get("signal_candles", 50))
+    signal_period = int(raw.get("signal_period", 14))
+    signal_oversold = float(raw.get("signal_oversold", 30.0))
+    signal_overbought = float(raw.get("signal_overbought", 70.0))
+    signal_trend_window = int(raw.get("signal_trend_window", 20))
+
     return DcaConfig(
         assets=assets,
         state_path=state_path,
         min_quote_buffer=min_quote_buffer,
+        signal_strategy=signal_strategy,
+        signal_granularity=signal_granularity,
+        signal_candles=signal_candles,
+        signal_period=signal_period,
+        signal_oversold=signal_oversold,
+        signal_overbought=signal_overbought,
+        signal_trend_window=signal_trend_window,
     )
 
 
@@ -278,6 +320,26 @@ def _preflight_quote_balances(
     }
 
 
+def _compute_dca_signal(config: DcaConfig, prices: list[float]) -> str:
+    if config.signal_strategy == "crossover":
+        return moving_average_crossover_signal(prices)
+    if config.signal_strategy == "rsi":
+        return rsi_signal(
+            prices,
+            period=config.signal_period,
+            oversold=config.signal_oversold,
+            overbought=config.signal_overbought,
+        )
+    # trend-rsi
+    return trend_rsi_signal(
+        prices,
+        period=config.signal_period,
+        oversold=config.signal_oversold,
+        overbought=config.signal_overbought,
+        trend_window=config.signal_trend_window,
+    )
+
+
 def execute_dca(
     client: CoinbaseAdvancedTradeClient,
     config: DcaConfig,
@@ -321,6 +383,38 @@ def execute_dca(
                 }
             )
             continue
+
+        if config.signal_strategy is not None:
+            try:
+                candles = client.get_candles(
+                    asset.product_id,
+                    granularity=config.signal_granularity,
+                    limit=config.signal_candles,
+                )
+                prices = [float(c["close"]) for c in candles]
+                signal = _compute_dca_signal(config, prices)
+            except Exception as exc:
+                results.append(
+                    {
+                        "product_id": asset.product_id,
+                        "funds": str(asset.funds),
+                        "status": "failed",
+                        "error": f"Signal check failed: {exc}",
+                    }
+                )
+                continue
+
+            if signal != "buy":
+                results.append(
+                    {
+                        "product_id": asset.product_id,
+                        "funds": str(asset.funds),
+                        "status": "skipped_signal",
+                        "signal": signal,
+                        "signal_strategy": config.signal_strategy,
+                    }
+                )
+                continue
 
         try:
             reference_price = _reference_price_for_product(client, asset.product_id)
@@ -379,6 +473,7 @@ def execute_dca(
         "submitted": sum(1 for item in results if item["status"] in {"submitted", "open", "pending", "filled"}),
         "previewed": sum(1 for item in results if item["status"] == "preview"),
         "skipped": sum(1 for item in results if item["status"] == "skipped"),
+        "signal_skipped": sum(1 for item in results if item["status"] == "skipped_signal"),
         "failed": sum(1 for item in results if item["status"] == "failed"),
     }
     return {

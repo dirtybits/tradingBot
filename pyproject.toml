@@ -12,6 +12,7 @@ dependencies = [
     "python-dotenv",
     "cryptography",
     "pyyaml>=6.0.3",
+    "mcp>=1.0",
 ]
 
 [tool.setuptools]

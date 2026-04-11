@@ -15,6 +15,9 @@ class FakeClient:
         self.price_calls: list[tuple[list[str], str]] = []
         self.order_calls: list[dict[str, object]] = []
         self.balance_rows: list[dict[str, object]] = []
+        # Override to control candle data returned by get_candles.
+        # Each entry is {"close": price}; defaults to a rising series (crossover buy signal).
+        self.candle_rows: list[dict[str, float]] | None = None
 
     def check_prices(self, symbols: list[str], quote: str = "USD") -> dict[str, float]:
         self.price_calls.append((symbols, quote))
@@ -27,6 +30,14 @@ class FakeClient:
                 if Decimal(str(row["available_balance"]["value"])) > 0
             ]
         return self.balance_rows
+
+    def get_candles(
+        self, product_id: str, *, granularity: str = "ONE_HOUR", limit: int = 50
+    ) -> list[dict[str, float]]:
+        if self.candle_rows is not None:
+            return self.candle_rows
+        # Default: rising prices so crossover/rsi strategies emit a buy signal
+        return [{"close": float(100 + i)} for i in range(limit)]
 
     def place_limit_order(self, product_id: str, **kwargs: object) -> dict[str, object]:
         self.order_calls.append({"product_id": product_id, **kwargs})
@@ -166,6 +177,84 @@ class DcaExecutionTests(unittest.TestCase):
         self.assertEqual(result["summary"]["failed"], 3)
         self.assertEqual(result["shortfalls"][0]["required"], "35")
         self.assertEqual(result["shortfalls"][0]["available"], "18.42")
+        self.assertEqual(len(client.order_calls), 0)
+
+
+    def test_execute_dca_signal_gated_buys_when_signal_is_buy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_dca_config_from_dict(
+                {
+                    "state_path": str(Path(tmpdir) / "state.sqlite"),
+                    "signal_strategy": "crossover",
+                    "assets": [{"product_id": "BTC-USD", "funds": 10}],
+                }
+            )
+            client = FakeClient()
+            # Default candle_rows is rising → crossover emits "buy"
+
+            result = execute_dca(client, config, live_mode=False, run_date=date(2026, 4, 8))
+
+        self.assertEqual(result["summary"]["previewed"], 1)
+        self.assertEqual(result["summary"]["signal_skipped"], 0)
+        self.assertEqual(len(client.order_calls), 1)
+
+    def test_execute_dca_signal_gated_skips_when_signal_is_not_buy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_dca_config_from_dict(
+                {
+                    "state_path": str(Path(tmpdir) / "state.sqlite"),
+                    "signal_strategy": "crossover",
+                    "assets": [
+                        {"product_id": "BTC-USD", "funds": 10},
+                        {"product_id": "ETH-USD", "funds": 10},
+                    ],
+                }
+            )
+            client = FakeClient()
+            # Falling prices → short MA < long MA → "sell" signal
+            client.candle_rows = [{"close": float(200 - i)} for i in range(50)]
+
+            result = execute_dca(client, config, live_mode=False, run_date=date(2026, 4, 8))
+
+        self.assertEqual(result["summary"]["previewed"], 0)
+        self.assertEqual(result["summary"]["signal_skipped"], 2)
+        self.assertEqual(result["results"][0]["status"], "skipped_signal")
+        self.assertEqual(result["results"][0]["signal_strategy"], "crossover")
+        self.assertEqual(len(client.order_calls), 0)
+
+    def test_execute_dca_signal_gated_mixed_results(self) -> None:
+        """One asset passes the signal check, one doesn't."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_dca_config_from_dict(
+                {
+                    "state_path": str(Path(tmpdir) / "state.sqlite"),
+                    "signal_strategy": "rsi",
+                    "assets": [
+                        {"product_id": "BTC-USD", "funds": 10},
+                        {"product_id": "ETH-USD", "funds": 10},
+                    ],
+                }
+            )
+            client = FakeClient()
+            call_count = 0
+
+            original_get_candles = client.get_candles
+
+            def patched_get_candles(product_id: str, **kwargs: object) -> list[dict[str, float]]:
+                nonlocal call_count
+                call_count += 1
+                # BTC: strongly rising → RSI overbought → "sell" (skip)
+                if product_id == "BTC-USD":
+                    return [{"close": float(100 + i * 5)} for i in range(50)]
+                # ETH: flat / mixed → RSI neutral → "hold" (also skip)
+                return [{"close": 100.0} for _ in range(50)]
+
+            client.get_candles = patched_get_candles  # type: ignore[method-assign]
+
+            result = execute_dca(client, config, live_mode=False, run_date=date(2026, 4, 8))
+
+        self.assertEqual(result["summary"]["signal_skipped"], 2)
+        self.assertEqual(result["summary"]["previewed"], 0)
         self.assertEqual(len(client.order_calls), 0)
 
 

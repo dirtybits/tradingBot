@@ -2,6 +2,19 @@ discount: 0.05
 post_only: true
 min_quote_buffer: 0
 state_path: ~/.tradebot/dca.sqlite
+
+# Optional: only buy an asset when its signal strategy agrees.
+# Without these fields every asset is bought unconditionally each run.
+#
+# signal_strategy: trend-rsi   # crossover | rsi | trend-rsi
+# signal_granularity: ONE_HOUR # ONE_MINUTE | FIVE_MINUTE | FIFTEEN_MINUTE | THIRTY_MINUTE |
+#                              #   ONE_HOUR | TWO_HOUR | SIX_HOUR | ONE_DAY
+# signal_candles: 50           # candles to fetch (must exceed signal_trend_window for trend-rsi)
+# signal_period: 14            # RSI lookback period
+# signal_oversold: 30          # RSI threshold -> buy signal
+# signal_overbought: 70        # RSI threshold -> sell signal (unused for DCA, but symmetric)
+# signal_trend_window: 20      # SMA window for trend filter in trend-rsi
+
 assets:
   - product_id: BTC-USD
     funds: 15
