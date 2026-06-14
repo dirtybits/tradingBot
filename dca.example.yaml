@@ -1,4 +1,4 @@
-discount: 0.05
+discount: 0.02
 post_only: true
 min_quote_buffer: 0
 state_path: ~/.tradebot/dca.sqlite
@@ -16,9 +16,9 @@ state_path: ~/.tradebot/dca.sqlite
 # signal_trend_window: 20      # SMA window for trend filter in trend-rsi
 
 assets:
-  - product_id: BTC-USD
+  - product_id: BTC-USDC
     funds: 15
-  - product_id: ETH-USD
+  - product_id: ETH-USDC
     funds: 10
-  - product_id: SOL-USD
+  - product_id: SOL-USDC
     funds: 10

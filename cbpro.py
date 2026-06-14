@@ -581,13 +581,25 @@ class CoinbaseAdvancedTradeClient:
         reference_price: Decimal | float | int | str,
         price_factor: Decimal | float | int | str = "0.003",
         post_only: bool = False,
+        base_increment: Decimal | float | int | str | None = None,
+        quote_increment: Decimal | float | int | str | None = None,
     ) -> Any:
         """Place a GTC limit order priced relative to *reference_price*.
 
         *price_factor* is the fractional distance from market (default 0.003 =
         0.3%).  Buy orders are placed *below* market; sell orders *above*.
         Set *post_only=True* to guarantee maker execution or cancel.
+        Increments are looked up from the product when not supplied.
         """
+        if base_increment is None or quote_increment is None:
+            try:
+                product = self.get_product(product_id)
+            except Exception:
+                product = {}
+            if base_increment is None:
+                base_increment = product.get("base_increment") or DEFAULT_BASE_INCREMENT
+            if quote_increment is None:
+                quote_increment = product.get("quote_increment") or DEFAULT_QUOTE_INCREMENT
         payload = build_limit_order(
             product_id,
             side=side,
@@ -596,6 +608,8 @@ class CoinbaseAdvancedTradeClient:
             reference_price=reference_price,
             price_factor=price_factor,
             post_only=post_only,
+            base_increment=base_increment,
+            quote_increment=quote_increment,
         )
         response = self._submit_private_action("POST", "orders", payload)
         success_response = response.get("success_response", {})
